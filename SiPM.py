@@ -1,8 +1,7 @@
 import numpy as np
 import glob
-import h5py
 
-from scipy.signal import butter, lfilter, freqz, filtfilt
+from scipy.signal import butter, filtfilt
 from scipy.special import erfc
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
@@ -18,6 +17,7 @@ class SiPM(Dataset.Dataset):
         self.fit_covariance = []
         self.peak_pos = []
         self.peak_height = []
+        self.integral = {}
         self.max = []
         self.deconv_filter = None
 
@@ -85,7 +85,7 @@ class SiPM(Dataset.Dataset):
     
     def get_deconvolved_waveform(self, data):
         if self.deconv_filter is None:
-            print('Getting deconvolution filter...')
+            # print('Getting deconvolution filter...')
             self.deconv_filter = self.get_convolution_filter()
         return np.convolve(data, self.deconv_filter, 'same')  
 
@@ -105,7 +105,8 @@ class SiPM(Dataset.Dataset):
             x_deconv.append(self.get_deconvolved_waveform(x))
         return np.array(x_deconv)
     
-    def get_peaks(self, data, height=35, distance=1):
+    def get_peaks(self, data, height=20, distance=1):
+        # self.wvf_num = 0
         if self.peak_height:
             pass
         else:
@@ -114,6 +115,7 @@ class SiPM(Dataset.Dataset):
             self.peak_num = []
             self.peak_wvf_num = []
             self.wvf_num = 0
+            
         for x in data:
             peaks,pdict = find_peaks(x, height=height, distance=distance)
 
@@ -127,8 +129,26 @@ class SiPM(Dataset.Dataset):
                 self.peak_pos.extend([-99999.99])
                 self.peak_num.extend([0])
                 self.peak_wvf_num.extend([self.wvf_num])
-        self.wvf_num += 1
+            self.wvf_num += 1
     
+    def get_peak_integral(self, data, window=[100]):
+        if len(self.integral.keys())>0:
+            pass
+        else: 
+            print('recreate')
+            for wind in window: 
+                self.integral[wind] = []
+        for i,x in enumerate(self.peak_pos):
+            if self.peak_height[i] == -99999.99:
+                print(i,'skipping')
+                continue
+            else:
+                print(i)
+                for wind in window:
+                    cut = np.where((self.Ch[0].Time>x-10) & (self.Ch[0].Time<x+wind))
+                    self.integral[wind].append(np.sum(self.Ch[0].Amp[self.peak_wvf_num[i]][cut]))
+        print(i)
+
     def clear(self):
         self.Ch[0].Amp = []
         self.Ch[0].Deconv = []
