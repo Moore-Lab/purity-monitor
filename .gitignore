@@ -8,3 +8,5 @@ default*
 settings.json
 Background.py
 *.out
+
+pyrpl/*

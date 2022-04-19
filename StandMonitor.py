@@ -15,10 +15,10 @@ class SensorData:
         self.Filepath = Filepath
         
         self.Data = {}
-        self.Index = np.arange(0,16,1)
+        self.Index = np.arange(0,22,1)
         self.PlotTime = PlotTime
         self.StartTime = datetime.datetime.now()
-        self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy1', 'dummy1', 'Time']
+        self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy1', 'dummy1', 'Time','Compressor Temp','Inlet Water Temp','Outlet Water Temp','Logger4','Logger5','Logger6']
         
     def GetData(self, Selection=None):
         self.File = h5py.File(self.Filepath, 'r')
@@ -49,6 +49,9 @@ class SensorData:
         SPressure = tuple([np.array(Sensor.ReturnData('System Pressure')) for Sensor in Sensors])
         self.SPressure = np.concatenate(SPressure,axis=1)
 
+        Compressor = tuple([np.array(Sensor.ReturnData('Compressor')) for Sensor in Sensors])
+        self.Compressor = np.concatenate(Compressor,axis=1)
+
         self.Time = np.concatenate(tuple([Sensor.Time for Sensor in Sensors]), axis=0)
     
         self.RefTime, self.DateTime = Sensors[0].RefTime, Sensors[0].DateTime
@@ -74,9 +77,12 @@ class SensorData:
         elif Selection == 'System Pressure': 
             Tags = self.Labels[0:2]
             Data = [self.Data[x] for x in Tags]
+        elif Selection == 'Compressor': 
+            Tags = self.Labels[16:21]
+            Data = [self.Data[x] for x in Tags]
         return Data
 
-    def PlotData(self, Data, Selection='Temperature', Time=None, XYLabel=None, Labels=None, Tags=None, XRange=0, YRange=[1,1], YTicks=10, XTicks=2):
+    def PlotData(self, Data, Selection='Temperature', Time=None, XYLabel=None, Labels=None, Tags=None, XRange=0, YRange=[1,1], YTicks=10, XTicks=2, Bin=1):
         if Selection == 'Temperature': 
             XYLabels = ['Time [hh:mm]', 'Temperature [C]']
             Tags = self.Labels[9:13]
@@ -85,10 +91,13 @@ class SensorData:
             XYLabels = ['Time [hh:mm]', 'Pressure [PSIG]']
             Tags = self.Labels[2:4]
             # Data = [self.Data[x] for x in Tags]
-        elif Selection == 'System Pressure': 
+        elif Selection == 'System Pressure':  
             XYLabels = ['Time [hh:mm]', 'Pressure [PSIG]']
             Tags = self.Labels[0:2]
             # Data = [self.Data[x] for x in Tags]
+        elif Selection == 'Compressor': 
+            XYLabels = ['Time [hh:mm]', 'Temperature [C]']
+            Tags = self.Labels[16:21]
 
         fig = plt.figure()
         ax = fig.gca()
@@ -112,7 +121,7 @@ class SensorData:
         plt.gcf().axes[0].xaxis.set_major_formatter(formatter)
 
         for ii,(X,Tag) in enumerate(zip(Data,Tags)):
-            plt.plot(self.Time, X, label=Tag, linewidth=2, color=colors[ii])
+            plt.plot(self.Time[::Bin], X[::Bin], label=Tag, linewidth=2, color=colors[ii])
         plt.legend(loc='upper left')
 
         if(XRange != 0):

@@ -7,7 +7,7 @@ ytick.labelsize : 16
 font.family : serif
 figure.figsize: 8,6
 figure.dpi : 100
-savefig.dpi : 300
+savefig.dpi : 60
 savefig.bbox : tight
 legend.fontsize : 12
 legend.loc : upper left

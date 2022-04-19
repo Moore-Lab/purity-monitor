@@ -50,7 +50,9 @@ class Dataset:
             # print(" | Number of files in ch%d...\t %d/%d" % (ch.ID, ch.Files[-1], np.sum(ch.Files)))
             for key in GroupKeys:
                 ch.Amp.append(np.array(Group.get(key)).flatten() * ch.VScale * ch.Pol)
-                ch.TimeStamp.append(datetime.datetime.strptime((f.attrs['Date']+Group.get(key).attrs["TimeStamp"]), '%Y%m%d%H%M%S'))
+                # print(f.attrs['Date'])
+                # print(Group.get(key).attrs["TimeStamp"].decode('utf-8'))
+                ch.TimeStamp.append(datetime.datetime.strptime(Group.get(key).attrs["TimeStamp"].decode('utf-8'), '%Y%m%d%H%M%S'))
         f.close()
             
 
