@@ -31,6 +31,10 @@ class RedPitaya():
                 break
         t_wvf = np.linspace(0, size*8E-9*self.dec_fac, size)*1e6
         if ascii:
-            return t_wvf,[struct.unpack('!h',bytearray(buff_byte[i:i+2]))[0] for i in range(0, len(buff_byte), 2)]
+            data = self.convert(buff_byte)
         else:
-            return t_wvf,buff_byte
+            data = buff_byte
+        return t_wvf, data
+
+    def convert(self, data):
+        return [struct.unpack('!h',bytearray(data[i:i+2]))[0] for i in range(0, len(data), 2)]
