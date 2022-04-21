@@ -28,6 +28,7 @@ class AFG2225(VisaUsbInstrument):
         :rtype: AFG2225
         """
         super(AFG2225, self).__init__(device_id=device_id, timeout=timeout)
+        self.open()
 
     ###########################################################################
     # Helper Methods

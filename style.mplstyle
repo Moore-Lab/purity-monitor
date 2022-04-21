@@ -17,7 +17,7 @@ mathtext.rm : serif
 axes.autolimit_mode : round_numbers
 axes.xmargin : 0
 axes.ymargin : 0
-text.usetex: True
+text.usetex: False
 legend.framealpha: 1.0
 legend.facecolor: white
 figure.facecolor : white
