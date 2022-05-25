@@ -37,13 +37,14 @@ class Dataset:
     # def ChooseFilesToAnalyze(self, Path):
     #     return 
 
-    def ImportDataFromHDF5(self, File, channels):
+    def ImportDataFromHDF5(self, File, channels, var=['trig','timestamp']):
         f = h5py.File(File, 'r')  
         # print(" | Filename...", File)
         Keys = list(f.keys())
         for ch in channels:
             ch.Time = np.array(f.get('Time')).flatten() * ch.TScale
-            ch.Trigger = np.array(f.get('Trigger')).flatten() * ch.VScale
+            if 'trig' in var:
+                ch.Trigger = np.array(f.get('Trigger')).flatten() * ch.VScale
             Group = f.get(ch.ChName)
             GroupKeys = Group.keys()
             ch.Files.append(len(GroupKeys))
@@ -52,7 +53,8 @@ class Dataset:
                 ch.Amp.append(np.array(Group.get(key)).flatten() * ch.VScale * ch.Pol)
                 # print(f.attrs['Date'])
                 # print(Group.get(key).attrs["TimeStamp"].decode('utf-8'))
-                ch.TimeStamp.append(datetime.datetime.strptime(Group.get(key).attrs["TimeStamp"].decode('utf-8'), '%Y%m%d%H%M%S'))
+                if "timestamp" in var:
+                    ch.TimeStamp.append(datetime.datetime.strptime(Group.get(key).attrs["TimeStamp"].decode('utf-8'), '%Y%m%d%H%M%S'))
         f.close()
             
 

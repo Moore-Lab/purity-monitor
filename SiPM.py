@@ -20,10 +20,18 @@ class SiPM(Dataset.Dataset):
         self.integral = {}
         self.max = []
         self.deconv_filter = None
+        self.shaping_time=[]
+        self.filter_coefficients=[]
+        self.sampling_freq=None #Sanpling rate for the waveforms in Hz
 
-    def get_filtered_waveform(self, time, amp, lowfreq=100, highfreq=100000, order=3, type='band'):
-        fs = 1/(np.mean(np.diff(time))/self.Ch[0].TScale)
-        return self.butter_filter(amp, fs, lowfreq, highfreq, order=order, type=type)
+    def get_filtered_waveform(self,amp):
+        filtered_waveform=[]
+        for filt_ceoffs in self.filter_coefficients:
+            b,a=filt_ceoffs[0],filt_ceoffs[1]
+            filtered_waveform.append(filtfilt(b,a,amp))
+        return filtered_waveform
+
+
 
     def get_averaged_waveform(self, time, amp, avg=4):
         avg_time = time[:-avg+1]
@@ -35,11 +43,22 @@ class SiPM(Dataset.Dataset):
         max_pos_cut = np.where(Amp[cut] == np.max(Amp[cut]))[0][0]
         max_pos = D0.Ch[1].Time[cut][max_pos_cut]
 
-    def butter_filter(self, data, fs, lowfreq, highfreq, order=6, type='band'):
-        nyq = 0.5 * fs
-        b, a = butter(order, [lowfreq/nyq, highfreq/nyq], btype=type, analog=False)
-        y = filtfilt(b, a, data)
-        return y
+
+
+    def setup_butter_filter(self, order=3):
+        '''
+        calculates filter coefficients for different shaping times
+        '''
+    
+        nyq = 0.5 * self.sampling_freq #this is the Nyquist frequency
+        
+        self.filter_coefficients=[]
+        for s_time in self.shaping_time:
+
+            b, a = butter(order, [(1/s_time)/nyq], btype='low', analog=False)
+            self.filter_coefficients.append([b,a])
+
+            
     
     def fit_peaks(self, time, data):
         peaks,pdict = find_peaks(data, height=35, width=20, distance=50)
@@ -65,10 +84,19 @@ class SiPM(Dataset.Dataset):
     def gauss_conv(self, x, mu=0, sigma=0.1):
         x = x-mu
         return np.exp(-np.square((x-mu)/sigma)/2)/(sigma*np.sqrt(2*np.pi))
+
+
+
     
     def get_sampling(self):
+        '''
+        Sets up sampling time and frequency that gets called only once
+        '''
         self.start = self.Ch[0].Time[0]
         self.length = self.Ch[0].Time[-1] - self.Ch[0].Time[0]
+        # print(self.Ch[0].Time[1])
+        self.sampling_freq=(1/(self.Ch[0].Time[1] - self.Ch[0].Time[0]))*self.Ch[0].TScale
+
 
     def get_convolution_filter(self):
         xdata = self.Ch[0].Time
