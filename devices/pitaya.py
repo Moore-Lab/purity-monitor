@@ -56,6 +56,7 @@ class RedPitaya():
        
         for i,waveforms in enumerate(data):
             if ch == 1:
+                print('hello')
                 
                 # now = datetime.datetime.now()
                 # seconds_since_midnight = (now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()
