@@ -74,4 +74,4 @@ class RedPitaya():
                 grp2.create_dataset(index, data=waveforms)
                 
         f.create_dataset('Time', data=t_wvf)
-        f.close()
+        f.close()   
