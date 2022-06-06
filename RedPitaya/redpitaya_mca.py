@@ -11,6 +11,7 @@ class mca (object):
         self.host    = host
         self.port    = port
         self.timeout = timeout
+        self.timer_multiple_seconds = 125000000 ## seconds to timer clicks
 
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -38,7 +39,7 @@ class mca (object):
         self.command(5,1,0)
 
     def setup_mca(self, chan=0, dec=4, negative=False, baseline_mode='none', baseline_level=0,
-                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0, integ_time=750000000, delay=100 ):
+                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0, integ_time=100, delay=100 ):
         
         ## set decimation factor
         self.command(4,0,dec)
@@ -69,7 +70,7 @@ class mca (object):
 
 
         ## integration time
-        self.command(11, chan, integ_time)
+        self.command(11, chan, integ_time*self.timer_multiple_seconds)
         self.command(0, chan, 0)
 
         ## PHA delay
@@ -130,7 +131,7 @@ class mca (object):
             converted_data = []
             nbytes = 4 ## for uint32s from the MCA code
             for i in range(int(len(data)/nbytes)):
-                converted_data.append(int.from_bytes(data[(i*nbytes):((i+1)*nbytes)], byteorder='big', signed=False))
+                converted_data.append(int.from_bytes(data[(i*nbytes):((i+1)*nbytes)], byteorder='little', signed=False))
             
             if(len(converted_data) == int(size/nbytes)):
                 read_enough_data = True
