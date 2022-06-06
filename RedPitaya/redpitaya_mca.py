@@ -32,8 +32,13 @@ class mca (object):
         """Close IP connection."""
         self.__del__()
 
+    def connect(self):
+        self.command(4,0,4)
+        self.command(5,0,0)
+        self.command(5,1,0)
+
     def setup_mca(self, chan=0, dec=4, negative=False, baseline_mode='none', baseline_level=0,
-                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0 ):
+                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0, integ_time=750000000, delay=100 ):
         
         ## set decimation factor
         self.command(4,0,dec)
@@ -55,9 +60,20 @@ class mca (object):
         ## baseline level (in bins)
         self.command(7,chan,baseline_level)
 
+        ## PHA delay
+        self.command(8,chan,delay)
+
         ## min/max threshold (in bins)
         self.command(9,chan,min_thresh)
         self.command(10,chan,max_thresh)
+
+
+        ## integration time
+        self.command(11, chan, integ_time)
+        self.command(0, chan, 0)
+
+        ## PHA delay
+        self.command(8,chan,delay)
 
         ## trigger
         #self.command(15, trig_source, 0) 
@@ -107,7 +123,7 @@ class mca (object):
         ## size -- should be left to default of 16384 bins x 4 bytes per bin
         
         read_enough_data = False ## loop until we get the right amount of data
-        max_reads = 10
+        max_reads = 1
         for n in range(max_reads):
             self.command(14, chan) ## ask MCA for data
             data=self._socket.recv(size)
