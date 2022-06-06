@@ -26,7 +26,7 @@ class Waveform:
         self.MeanAmp = []
         self.Time = []
         self.Trigger = []
-        self.Max = []
+        # self.Max = []
         self.MaxT = []
         self.AmpFFT = []
         self.TimeFFT = []
@@ -127,15 +127,18 @@ class Waveform:
             self.Integral.append(np.sum(Data[i][self.FindTimeBin(0):self.FindTimeBin(200)])/1.0)
         self.Integral = np.array(self.Integral)
         
-    def GetAllMaxima(self, Data, Time=150, state=False):
-        self.Max = []
-        self.MaxT = []
-        if(state): print(" | Getting extrema of individual files...")
+    def GetAllMaxima(self, Data):
+        max_Amp=[]
         for ii,data in enumerate(Data):
-            self.Max.append(np.max(data[self.FindTimeBin(0):self.FindTimeBin(150)]))
-            self.MaxT.append(self.Time[np.where(data==self.Max[ii])[0][0]])
-        self.Max = np.array(self.Max)
-        self.MaxT = np.array(self.MaxT)
+            # print(ii)
+            # print(np.max(data))
+            max_Amp.append(np.max(data))
+            # print(max_Amp)
+        # self.MaxT.append(self.Time[np.where(Data==self.Max[ii])[0][0]])
+        # self.Max = np.array(self.Max)
+        # self.MaxT = np.array(self.MaxT)
+        return(max_Amp)
+        
 
     def GetAllFFT(self, state=False):
         if(state): print(" | Getting Fourier spectra...")
