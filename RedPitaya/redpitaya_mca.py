@@ -32,25 +32,72 @@ class mca (object):
         """Close IP connection."""
         self.__del__()
 
-    def setup_mca(self, chan=0, dec=4):
+    def setup_mca(self, chan=0, dec=4, negative=False, baseline_mode='none', baseline_level=0,
+                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0 ):
         
         ## set decimation factor
         self.command(4,0,dec)
 
-    def rx_txt(self, chunksize = 4096):
-        """Receive text string and return it after removing the delimiter."""
-        return self._socket.recv(chunksize) #.decode('utf-8') # Receive chunk size of 2^n 
+        ## set the channel polarity
+        if(negative):
+            self.command(5,chan,1)
+        else:
+           self.command(5,chan,0) 
+
+        ## baseline mode (auto subtract or none)
+        if baseline_mode == 'none':
+            self.command(6,chan,0)
+        elif baseline_mode == 'auto':
+            self.command(6,chan,1)
+        else:
+            print("Failed to set baseline mode, must be '''none''' or '''auto''' ")
+
+        ## baseline level (in bins)
+        self.command(7,chan,baseline_level)
+
+        ## min/max threshold (in bins)
+        self.command(9,chan,min_thresh)
+        self.command(10,chan,max_thresh)
+
+        ## trigger
+        #self.command(15, trig_source, 0) 
+        #self.command(16, trig_source, trig_slope)
+
+    def read_timer(self, chan=0):
+
+        self.command(13, chan)
+        t=self._socket.recv(8)
+        return t
+    
+    def reset_histo(self, chan=0):
+        
+        self.command(12, chan, 0)
+        self.command(0, chan, 0) ## reset timer
+        self.command(1, chan, 0) ## reset histo
+        
+        self.read_timer(chan)
+        self.read_histo_data(chan)
+
+    def start_histo(self, chan=0):
+        self.command(12, chan, 1)
+
+    def pause_histo(self, chan=0):
+        self.command(12, chan, 0)
 
     def command(self, code, chan, data=0):
-        code_str = chr(code) ## two byte hex string for the code (see server code)
-        if(chan == 0):
-            chan_str = '\x00'
+ 
+        code_bytes = code.to_bytes(length=1, byteorder='little')
+
+        if(chan == 0): ## 1 byte for the channel (0 or 1)
+            chan_bytes = '\x00'.encode()
         else:
-            chan_str = '\x10' ## 1 byte for the channel (0 or 1)
-        data_bytes = int.to_bytes(data, length=4, byteorder='little')
-        data_str=chr(data) + '\x00\x00\x00\x00\x00' # kludge for now, only can pass 1 byte this way
-        buffer = data_str + chan_str + code_str
-        self._socket.send(buffer.encode('utf-8'))
+            chan_bytes = '\x10'.encode() 
+
+        data_bytes = data.to_bytes(length=6, byteorder='little')
+
+        buffer = data_bytes + chan_bytes + code_bytes
+
+        self._socket.send(buffer)
         
 
     def read_histo_data(self, chan, size=65536):
@@ -59,12 +106,21 @@ class mca (object):
         ## chan -- channel number (must be 0 or 1)
         ## size -- should be left to default of 16384 bins x 4 bytes per bin
         
-        self.command(14, chan) ## ask MCA for data
-        data=self._socket.recv(size)
-        converted_data = []
-        nbytes = 4 ## for uint32s from the MCA code
-        for i in range(int(len(data)/nbytes)):
-            converted_data.append(int.from_bytes(data[(i*nbytes):((i+1)*nbytes)], byteorder='big', signed=False))
-        
+        read_enough_data = False ## loop until we get the right amount of data
+        max_reads = 10
+        for n in range(max_reads):
+            self.command(14, chan) ## ask MCA for data
+            data=self._socket.recv(size)
+            converted_data = []
+            nbytes = 4 ## for uint32s from the MCA code
+            for i in range(int(len(data)/nbytes)):
+                converted_data.append(int.from_bytes(data[(i*nbytes):((i+1)*nbytes)], byteorder='big', signed=False))
+            
+            if(len(converted_data) == int(size/nbytes)):
+                read_enough_data = True
+                break
 
-        return(converted_data)
+        if read_enough_data:
+            return(converted_data)
+        else:
+            return([]) ## return empty if we didn't get the data we expected
