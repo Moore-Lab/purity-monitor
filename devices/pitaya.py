@@ -28,6 +28,10 @@ class RedPitaya():
         self.inst.tx_txt('ACQ:TRIG:LEV {} mV'.format(level))
         self.inst.tx_txt('ACQ:TRIG:DLY {}'.format(delay))
 
+    def ext_trigger(self, edge='P'):
+        ## setup an external trigger
+        self.inst.tx_txt('ACQ:TRIG EXT_{}E'.format(edge))
+
     def start(self):
         self.inst.tx_txt('ACQ:START')
 

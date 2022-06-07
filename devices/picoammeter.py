@@ -21,6 +21,10 @@ class Keithley6487:
         """Set the voltage level of the voltage source."""
         self.write("SOUR:VOLT " + str(volts))
 
+    def voltage_source_range(self, range):
+        """Set the range for the voltage source (10, 50, or 500). Will round up if intermediate range is sent"""
+        self.write("SOUR:VOLT:RANG " + str(int(range)))
+
     def voltage_source_state(self, on):
         """Turn voltage source on or off. Send "False" to turn off."""
         self.write("SOUR:VOLT:STAT " + ["OFF", "ON"][on])
