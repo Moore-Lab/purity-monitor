@@ -3,17 +3,55 @@ import struct
 import numpy as np
 import h5py
 import time, datetime
-
+import paramiko
 
 class RedPitaya():
 
-    def __init__(self,ip_address):
+    def __init__(self, ip_address, username, password):
+
+        self.ip_address = ip_address
+        self.un = username
+        self.pw = password
+
+        #self.start_scpi_server()
+
         self.inst = scpi.scpi(ip_address)
         self.max_buffer_size = 16384
     
     def __del__(self):
-        print('Destructor called, Employee deleted.')
-    
+        #self.stop_scpi_server()
+
+        print('Red pitaya SCPI server stopped')
+
+    def ssh_connect(self):
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.connect(self.ip_address, username=self.un, password=self.pw)
+        return ssh
+
+    def start_scpi_server(self):
+        
+        ssh = self.ssh_connect()
+
+        ## kill the mca in case it is running
+        ssh.exec_command('/opt/redpitaya/www/apps/mcpha/stop.sh')
+
+        ## start the scpi server
+        #ssh.exec_command('systemctl stop redpitaya_nginx')
+        ssh.exec_command('systemctl start redpitaya_scpi')
+
+        ssh.close()
+        
+        print('Red pitaya SCPI server started')
+
+
+    def stop_scpi_server(self):
+
+        ssh = self.ssh_connect()
+        ssh.exec_command('systemctl stop redpitaya_scpi')
+
+        print('Red pitaya SCPI server stopped')
+
     def configure(self, dec_fac):
         self.dec_fac = dec_fac
         self.inst.tx_txt('ACQ:DATA:FORMAT ASCII')

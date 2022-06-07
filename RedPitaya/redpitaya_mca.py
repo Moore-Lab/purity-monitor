@@ -1,4 +1,5 @@
 import socket
+import paramiko
 
 class mca (object):
     """MCA class used to access Red Pitaya over an IP network."""
@@ -12,6 +13,11 @@ class mca (object):
         self.port    = port
         self.timeout = timeout
         self.timer_multiple_seconds = 125000000 ## seconds to timer clicks
+        self.un = 'root'
+        self.pw = 'root'
+
+        ## make sure the server code is running
+        #self.start_mca()
 
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -25,6 +31,9 @@ class mca (object):
             print('SCPI >> connect({:s}:{:d}) failed: {:s}'.format(host, port, e))
 
     def __del__(self):
+
+        #self.stop_mca()
+
         if self._socket is not None:
             self._socket.close()
         self._socket = None
@@ -32,6 +41,25 @@ class mca (object):
     def close(self):
         """Close IP connection."""
         self.__del__()
+
+    def ssh_connect(self):
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.connect(self.host, username=self.un, password=self.pw)
+        return ssh
+
+    def start_mca(self):
+        ssh = self.ssh_connect()
+        ssh.exec_command('cat /opt/redpitaya/www/apps/mcpha/mcpha.bit > /dev/xdevcfg')
+        ssh.exec_command('/opt/redpitaya/www/apps/mcpha/start.sh')
+
+        ssh.close()
+
+    def stop_mca(self):
+        ssh = self.ssh_connect()
+        ssh.exec_command('/opt/redpitaya/www/apps/mcpha/stop.sh')
+
+        ssh.close()
 
     def connect(self):
         self.command(4,0,4)
