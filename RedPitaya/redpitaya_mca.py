@@ -1,5 +1,6 @@
 import socket
 import paramiko
+import h5py
 
 class mca (object):
     """MCA class used to access Red Pitaya over an IP network."""
@@ -169,3 +170,18 @@ class mca (object):
             return(converted_data)
         else:
             return([]) ## return empty if we didn't get the data we expected
+
+    def save(self, data, ch, tag, path):
+        f = h5py.File("{}/{}.h5".format(path, tag), "w")
+        grp1=f.create_group("ch1")
+        grp2=f.create_group("ch2")
+       
+        if ch == 1:
+            index='0'        
+            grp1.create_dataset(index, data=data)
+
+        elif ch ==2:
+            index='0'        
+            grp2.create_dataset(index, data=data)
+                
+        f.close()  
