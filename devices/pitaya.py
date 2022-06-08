@@ -57,6 +57,8 @@ class RedPitaya():
         self.inst.tx_txt('ACQ:DATA:FORMAT ASCII')
         self.inst.tx_txt('ACQ:DATA:UNITS VOLT')
         self.inst.tx_txt('ACQ:DEC {}'.format(dec_fac))
+        self.gain(ch=1, gain='LV')
+        self.gain(ch=2, gain='LV')
 
     def gain(self, ch=1, gain='LV'):
         self.inst.tx_txt('ACQ:SOUR{}:GAIN {}'.format(ch, gain))
@@ -91,29 +93,26 @@ class RedPitaya():
     def convert(self, data):
         return np.array([struct.unpack('!f',bytearray(data[i:i+4]))[0] for i in range(0, len(data), 4)])
 
-    def save(self, t_wvf, data, ch, tag, path):
+    def save(self, t_wvf, data_dict, tag, path):
+        
         f = h5py.File("{}/{}.h5".format(path, tag), "w")
         grp1=f.create_group("ch1")
         grp2=f.create_group("ch2")
         date = datetime.datetime.today().strftime('%Y_%m_%d_%H_%M_%S')
         grp1.attrs['time'] = date
         grp2.attrs['time'] = date
-        for i,waveforms in enumerate(data):
-            if ch == 1:
-                print('hello')
+
+        chan_list = data_dict.keys()
+        
+        for chan in chan_list:
+            
+            for i,waveforms in enumerate(data_dict[chan]):
                 
-                index=str(i)        
-                grp1.create_dataset(index, data=waveforms)
-                # print(s_m)
-            elif ch ==2:
-                
-                # now = datetime.datetime.now()
-                # print('now: ',now)
-                # seconds_since_midnight = (now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()
-                # s_m=str(seconds_since_midnight)
-                # print(s_m)
-                index=str(i)        
-                grp2.create_dataset(index, data=waveforms)
+                index=str(i)  
+                if chan == 1:
+                    grp1.create_dataset(index, data=waveforms)
+                elif chan ==2:        
+                    grp2.create_dataset(index, data=waveforms)
                 
         f.create_dataset('Time', data=t_wvf)
         f.close()   
