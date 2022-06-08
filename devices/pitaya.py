@@ -95,14 +95,13 @@ class RedPitaya():
         f = h5py.File("{}/{}.h5".format(path, tag), "w")
         grp1=f.create_group("ch1")
         grp2=f.create_group("ch2")
-       
+        date = datetime.datetime.today().strftime('%Y_%m_%d_%H_%M_%S')
+        grp1.attrs['time'] = date
+        grp2.attrs['time'] = date
         for i,waveforms in enumerate(data):
             if ch == 1:
                 print('hello')
                 
-                # now = datetime.datetime.now()
-                # seconds_since_midnight = (now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()
-                # s_m=str(seconds_since_midnight)
                 index=str(i)        
                 grp1.create_dataset(index, data=waveforms)
                 # print(s_m)

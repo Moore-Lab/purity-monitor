@@ -1,6 +1,6 @@
 import socket
 import paramiko
-import h5py
+import h5py, datetime
 
 class mca (object):
     """MCA class used to access Red Pitaya over an IP network."""
@@ -175,7 +175,9 @@ class mca (object):
         f = h5py.File("{}/{}.h5".format(path, tag), "w")
         grp1=f.create_group("ch1")
         grp2=f.create_group("ch2")
-       
+        date = datetime.datetime.today().strftime('%Y_%m_%d_%H_%M_%S')
+        grp1.attrs['time'] = date
+        grp2.attrs['time'] = date
         if ch == 1:
             index='0'        
             grp1.create_dataset(index, data=data)
