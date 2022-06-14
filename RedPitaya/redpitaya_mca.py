@@ -1,6 +1,8 @@
 import socket
 import paramiko
-import h5py, datetime
+import h5py
+import time
+import datetime
 
 class mca (object):
     """MCA class used to access Red Pitaya over an IP network."""
@@ -187,3 +189,51 @@ class mca (object):
             grp2.create_dataset(index, data=data)
                 
         f.close()  
+
+    def config_scope(self, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0):
+
+        # set decimation
+        self.command(4,0,dec)
+
+        # set trigger mode 
+        self.command(17,0,trig_mode)
+
+        # set trigger source
+        self.command(15,trig_chan)
+
+        # set trigger slope
+        self.command(16,0,trig_slope)
+
+        # set trigger level
+        self.command(18,0,trig_level)
+
+        # reset scope
+        self.command(2,0)
+        
+
+    def acq_scope(self, chan=0, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0, samples_pre=5000, samples_total=65536, wait=0.0):
+
+        #setup up scope
+        self.config_scope(dec=dec, trig_chan=trig_chan, trig_slope=trig_slope, trig_mode=trig_mode, trig_level=trig_level)
+
+        time.sleep(wait)
+
+        # set number of samples before trigger
+        self.command(19,0,samples_pre)
+
+        # set total number of samples
+        self.command(20,0,samples_total)
+
+        # start scope
+        self.command(21,0)
+
+        while True:
+            self.command(22,0)
+            status = self._socket.recv(4)
+            status = int(status.hex(),16)
+            if status == 0:
+                # print('Scope ready')
+                break
+
+        # acquire data
+        self.command(23,0)
