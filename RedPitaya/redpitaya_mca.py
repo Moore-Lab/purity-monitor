@@ -8,7 +8,7 @@ class mca (object):
     """MCA class used to access Red Pitaya over an IP network."""
     delimiter = '' #'\r\n'
 
-    def __init__(self, host='172.28.175.57', timeout=2, port=1001):
+    def __init__(self, host='172.28.175.57', timeout=10, port=1001):
         """Initialize object and open IP connection.
         Host IP should be a string in parentheses, like '192.168.1.100'.
         """
@@ -192,8 +192,8 @@ class mca (object):
 
     def config_scope(self, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0):
 
-        # set decimation
-        self.command(4,0,dec)
+        # # set decimation
+        # self.command(4,0,dec)
 
         # set trigger mode 
         self.command(17,0,trig_mode)
@@ -211,7 +211,7 @@ class mca (object):
         self.command(2,0)
         
 
-    def acq_scope(self, chan=0, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0, samples_pre=5000, samples_total=65536, wait=0.0):
+    def acq_scope(self, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0, samples_pre=5000, samples_total=65536, wait=0.0):
 
         #setup up scope
         self.config_scope(dec=dec, trig_chan=trig_chan, trig_slope=trig_slope, trig_mode=trig_mode, trig_level=trig_level)
@@ -228,12 +228,15 @@ class mca (object):
         self.command(21,0)
 
         while True:
+            # time.sleep(0.2)
             self.command(22,0)
-            status = self._socket.recv(4)
-            status = int(status.hex(),16)
+            hexcode = self._socket.recv(4)
+            # status = int(status.hex(),16)
+            status = int.from_bytes(hexcode, byteorder='little', signed=False)
             if status == 0:
                 # print('Scope ready')
                 break
+            # time.sleep(0.2)
 
         # acquire data
         self.command(23,0)

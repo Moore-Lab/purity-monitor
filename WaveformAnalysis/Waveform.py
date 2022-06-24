@@ -1,6 +1,6 @@
 import numpy as np
 import scipy
-from scipy.fftpack import fft
+from scipy.fftpack import fft 
 from scipy.signal import butter, lfilter, sosfilt
 from scipy.optimize import curve_fit
 
@@ -62,14 +62,14 @@ class Waveform:
         self.TotalTime = self.Time[-1]-self.Time[0]
         self.Sampling = 1.0/(self.TotalTime/self.TScale/self.Samples)
         
-    def SubtractBaseline(self, Data, state=False):
+    def SubtractBaseline(self, Data, cutoff=0, state=False):
         if(state): print(" | Subtracting baseline...")
-        self.BaseCounts = self.FindTimeBin(-50)
+        self.BaseCounts = self.FindTimeBin(cutoff)
         self.BaseStd = []
         self.Baseline = []
         for ii,data in enumerate(Data):
-            self.BaseStd.append(np.std(data[self.FindTimeBin(-900):self.FindTimeBin(-10)]))
-            self.Baseline.append(np.average(data[self.FindTimeBin(-50):self.FindTimeBin(0)]))
+            self.BaseStd.append(np.std(data[0:self.FindTimeBin(cutoff)]))
+            self.Baseline.append(np.average(data[0:self.FindTimeBin(cutoff)]))
             # self.Baseline.append(np.average(self.Amp[i][:self.BaseCounts]))
             Data[ii] -= self.Baseline[ii]
         self.BaseStd = np.array(self.BaseStd)
@@ -127,17 +127,15 @@ class Waveform:
             self.Integral.append(np.sum(Data[i][self.FindTimeBin(0):self.FindTimeBin(200)])/1.0)
         self.Integral = np.array(self.Integral)
         
-    def GetAllMaxima(self, Data):
-        max_Amp=[]
+    def GetAllMaxima(self, Data, cutoff=150, state=False):
+        self.Max = []
+        self.MaxT = []
+        if(state): print(" | Getting extrema of individual files...")
         for ii,data in enumerate(Data):
-            # print(ii)
-            # print(np.max(data))
-            max_Amp.append(np.max(data))
-            # print(max_Amp)
-        # self.MaxT.append(self.Time[np.where(Data==self.Max[ii])[0][0]])
-        # self.Max = np.array(self.Max)
-        # self.MaxT = np.array(self.MaxT)
-        return(max_Amp)
+            self.Max.append(np.max(data[:self.FindTimeBin(cutoff)]))
+            self.MaxT.append(self.Time[np.where(data==self.Max[ii])[0][0]])
+        self.Max = np.array(self.Max)
+        self.MaxT = np.array(self.MaxT)
         
 
     def GetAllFFT(self, state=False):
