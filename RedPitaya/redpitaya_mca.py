@@ -112,10 +112,10 @@ class mca (object):
         #self.command(16, trig_source, trig_slope)
 
     def read_timer(self, chan=0):
-
         self.command(13, chan)
         t=self._socket.recv(8)
-        return t
+        tout = int.from_bytes(t, byteorder='little', signed=False)
+        return tout
     
     def reset_histo(self, chan=0):
         
