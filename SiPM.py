@@ -22,7 +22,7 @@ class SiPM(Dataset.Dataset):
         self.deconv_filter = None
         self.shaping_time=[]
         self.filter_coefficients=[]
-        self.sampling_freq=None #Sanpling rate for the waveforms in Hz
+        self.sampling_freq=None #Sampling rate for the waveforms in Hz
 
     def get_filtered_waveform(self,amp):
         filtered_waveform=[]

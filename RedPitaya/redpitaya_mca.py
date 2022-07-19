@@ -1,10 +1,14 @@
 import socket
+import paramiko
+import h5py
+import time
+import datetime
 
 class mca (object):
     """MCA class used to access Red Pitaya over an IP network."""
     delimiter = '' #'\r\n'
 
-    def __init__(self, host='172.28.175.57', timeout=2, port=1001):
+    def __init__(self, host='172.28.175.57', timeout=10, port=1001):
         """Initialize object and open IP connection.
         Host IP should be a string in parentheses, like '192.168.1.100'.
         """
@@ -12,6 +16,11 @@ class mca (object):
         self.port    = port
         self.timeout = timeout
         self.timer_multiple_seconds = 125000000 ## seconds to timer clicks
+        self.un = 'root'
+        self.pw = 'root'
+
+        ## make sure the server code is running
+        #self.start_mca()
 
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -25,6 +34,9 @@ class mca (object):
             print('SCPI >> connect({:s}:{:d}) failed: {:s}'.format(host, port, e))
 
     def __del__(self):
+
+        #self.stop_mca()
+
         if self._socket is not None:
             self._socket.close()
         self._socket = None
@@ -32,6 +44,25 @@ class mca (object):
     def close(self):
         """Close IP connection."""
         self.__del__()
+
+    def ssh_connect(self):
+        ssh = paramiko.SSHClient()
+        ssh.load_system_host_keys()
+        ssh.connect(self.host, username=self.un, password=self.pw)
+        return ssh
+
+    def start_mca(self):
+        ssh = self.ssh_connect()
+        ssh.exec_command('cat /opt/redpitaya/www/apps/mcpha/mcpha.bit > /dev/xdevcfg')
+        ssh.exec_command('/opt/redpitaya/www/apps/mcpha/start.sh')
+
+        ssh.close()
+
+    def stop_mca(self):
+        ssh = self.ssh_connect()
+        ssh.exec_command('/opt/redpitaya/www/apps/mcpha/stop.sh')
+
+        ssh.close()
 
     def connect(self):
         self.command(4,0,4)
@@ -81,10 +112,10 @@ class mca (object):
         #self.command(16, trig_source, trig_slope)
 
     def read_timer(self, chan=0):
-
         self.command(13, chan)
         t=self._socket.recv(8)
-        return t
+        tout = int.from_bytes(t, byteorder='little', signed=False)
+        return tout
     
     def reset_histo(self, chan=0):
         
@@ -141,3 +172,71 @@ class mca (object):
             return(converted_data)
         else:
             return([]) ## return empty if we didn't get the data we expected
+
+    def save(self, data, ch, tag, path):
+        f = h5py.File("{}/{}.h5".format(path, tag), "w")
+        grp1=f.create_group("ch1")
+        grp2=f.create_group("ch2")
+        date = datetime.datetime.today().strftime('%Y_%m_%d_%H_%M_%S')
+        grp1.attrs['time'] = date
+        grp2.attrs['time'] = date
+        if ch == 1:
+            index='0'        
+            grp1.create_dataset(index, data=data)
+
+        elif ch ==2:
+            index='0'        
+            grp2.create_dataset(index, data=data)
+                
+        f.close()  
+
+    def config_scope(self, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0):
+
+        # # set decimation
+        # self.command(4,0,dec)
+
+        # set trigger mode 
+        self.command(17,0,trig_mode)
+
+        # set trigger source
+        self.command(15,trig_chan)
+
+        # set trigger slope
+        self.command(16,0,trig_slope)
+
+        # set trigger level
+        self.command(18,0,trig_level)
+
+        # reset scope
+        self.command(2,0)
+        
+
+    def acq_scope(self, dec=4, trig_chan=1, trig_slope=0, trig_mode=0, trig_level=0, samples_pre=5000, samples_total=65536, wait=0.0):
+
+        #setup up scope
+        self.config_scope(dec=dec, trig_chan=trig_chan, trig_slope=trig_slope, trig_mode=trig_mode, trig_level=trig_level)
+
+        time.sleep(wait)
+
+        # set number of samples before trigger
+        self.command(19,0,samples_pre)
+
+        # set total number of samples
+        self.command(20,0,samples_total)
+
+        # start scope
+        self.command(21,0)
+
+        while True:
+            # time.sleep(0.2)
+            self.command(22,0)
+            hexcode = self._socket.recv(4)
+            # status = int(status.hex(),16)
+            status = int.from_bytes(hexcode, byteorder='little', signed=False)
+            if status == 0:
+                # print('Scope ready')
+                break
+            # time.sleep(0.2)
+
+        # acquire data
+        self.command(23,0)

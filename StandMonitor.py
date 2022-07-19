@@ -18,7 +18,7 @@ class SensorData:
         self.Index = np.arange(0,22,1)
         self.PlotTime = PlotTime
         self.StartTime = datetime.datetime.now()
-        self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy1', 'dummy1', 'Time','Compressor Temp','Inlet Water Temp','Outlet Water Temp','Logger4','Logger5','Logger6']
+        self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy1', 'dummy1', 'Time']
         
     def GetData(self, Selection=None):
         self.File = h5py.File(self.Filepath, 'r')
@@ -49,8 +49,8 @@ class SensorData:
         SPressure = tuple([np.array(Sensor.ReturnData('System Pressure')) for Sensor in Sensors])
         self.SPressure = np.concatenate(SPressure,axis=1)
 
-        Compressor = tuple([np.array(Sensor.ReturnData('Compressor')) for Sensor in Sensors])
-        self.Compressor = np.concatenate(Compressor,axis=1)
+        # Compressor = tuple([np.array(Sensor.ReturnData('Compressor')) for Sensor in Sensors])
+        # self.Compressor = np.concatenate(Compressor,axis=1)
 
         self.Time = np.concatenate(tuple([Sensor.Time for Sensor in Sensors]), axis=0)
     

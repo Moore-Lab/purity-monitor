@@ -764,3 +764,18 @@ class AFG2225(VisaUsbInstrument):
             out = self.set_phase(channel, phase)
             it_worked = it_worked and out
         return it_worked
+
+    def couple_channel(self, channel, mode='on'):
+        """ Couple channel to the other (useful as a trigger)
+        mode must be "Off" or "on"
+        """
+
+        if mode == 'on':
+            command = "SOURCE{0}:FREQ:COUP:MODE Ratio".format(channel)
+            self.write(command)
+
+            command = "SOURCE{0}:FREQ:COUP:RAT 1".format(channel)
+            self.write(command)
+        else:
+            command = "SOURCE{0}:FREQ:COUP:MODE Off".format(channel)
+            self.write(command)
