@@ -30,6 +30,7 @@ from ipywidgets import IntProgress
 from IPython.display import display
 import scipy.special
 from multiprocessing import Process, Manager, Pool
+import tracemalloc
 
 importlib.reload(Dataset)
 importlib.reload(SiPM)
@@ -84,6 +85,7 @@ class Gat_HPC:  #   Gain Analysis Tool
     gain_fit_params = []
 
     def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,force=False,notify=False):
+        tracemalloc.start()
         self.update(60,'INIT')
         self.source_files = glob.glob(base_regex+filename_regex)
         self.voltages = [x.split('_')[-2] for x in self.source_files]
@@ -136,6 +138,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             self.SiPMs[volt].Ch = [Waveform.Waveform(ID=x, Pol=1) for x in range(1,3)]
 
             for file in natsorted(self.SiPMs[volt].Files):
+                print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                 self.SiPMs[volt].ImportDataFromHDF5(file, self.SiPMs[volt].Ch, var=[])
                 self.SiPMs[volt].get_sampling()
                 if not self.shaping_time is None: self.SiPMs[volt].shaping_time=[self.shaping_time]
@@ -168,6 +171,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             diffs = []
 
             for waveform in self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp: #loop over the waveforms inside the file
+                print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                 x = [] #    must be same lenght as y. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methods).
                 y = [] #    must be same length as x. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methos).
                 f.value += 1
@@ -258,10 +262,12 @@ class Gat_HPC:  #   Gain Analysis Tool
         coords = []
         if os.path.exists(filename):
             with open(filename, 'r') as file:
+                print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                 lines = file.readlines()
                 lines = [line.replace('\n','') for line in lines]
                 #pp.pprint(lines)
                 for ii, line in enumerate(lines):
+                    print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                     if str(line) == '@@@@':
                         str_x = lines[ii-2]
                         str_y = lines[ii-1]
@@ -381,6 +387,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         else: peaks_coords = self.eval_waveform_argmax(voltage)[1]
 
         popt_list, perr_list = None, None
+        print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
         peaks_coords = self.__peak_filter(peaks_coords)
 
         if not find_best:
@@ -532,6 +539,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             return self.__get_peaks(peaks_coords,*best,min_peaks,plot=True, is_best=True)
     
     def perm_run(self, perm, peaks_coords, min_peaks,trials, max_error):
+        print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
         popt_list,perr_list = self.__get_peaks(peaks_coords,perm[0],perm[1],perm[2],peaks_min=min_peaks,plot=False)
         if False in perr_list or np.inf in perr_list: pass#skipped += 1
         else:
