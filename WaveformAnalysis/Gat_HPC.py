@@ -83,6 +83,7 @@ class Gat_HPC:  #   Gain Analysis Tool
     peaks_final_perr = None
     gain_evaluation = None
     gain_fit_params = []
+    tau_est_final = None
 
     def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,force=False,notify=False):
         tracemalloc.start()
@@ -142,10 +143,10 @@ class Gat_HPC:  #   Gain Analysis Tool
                 self.SiPMs[volt].ImportDataFromHDF5(file, self.SiPMs[volt].Ch, var=[])
                 self.SiPMs[volt].get_sampling()
                 if not self.shaping_time is None: self.SiPMs[volt].shaping_time=[self.shaping_time]
-                #self.SiPMs[volt].Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPMs[volt].Ch[self.CHANNEL].Amp, cutoff=150)
+                self.SiPMs[volt].Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPMs[volt].Ch[self.CHANNEL].Amp, cutoff=150)
                 #self.SiPMs[volt].setup_butter_filter() # calculate the butterworth filter coefficients
         
-    def eval_waveform_func_fit(self, voltage, bounds=None,reload=False):
+    def eval_waveform_func_fit(self, voltage, bounds=None,reload=False,fix_params=False):
         #raise(NotImplementedError('Not ready yet!'))
         if self.error: self.__throw_error()
         voltage = float(voltage)
@@ -170,8 +171,10 @@ class Gat_HPC:  #   Gain Analysis Tool
 
             diffs = []
 
+            if fix_params:
+                self.__resolve_wf_fit_params(voltage)
+
             for waveform in self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp: #loop over the waveforms inside the file
-                print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                 x = [] #    must be same lenght as y. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methods).
                 y = [] #    must be same length as x. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methos).
                 f.value += 1
@@ -193,7 +196,10 @@ class Gat_HPC:  #   Gain Analysis Tool
                         lost += 1
                     else:
                         func = self.__wave_func(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,*popt)
-                        max_x,max_y = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.argmax(func)],func[np.argmax(func)]
+                        peak_x = 0
+                        print(f'Max {np.asarray(func).max()} ({np.asarray(waveform).max()}) while {popt}')
+                        print(peak_x)
+                        max_x,max_y = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[peak_x], func[peak_x]
                         if max_x < bounds[0] or max_x > bounds[1]: self.log(f'Skipping due to peak out of bounds at {max_x}x{max_y}',4)
                         self.log(f'Max {max_x}x{max_y}',4)
                         perr = np.sqrt(np.diag(pcov))[1]
@@ -220,6 +226,9 @@ class Gat_HPC:  #   Gain Analysis Tool
                                 plt.scatter([max_x],[max_y],50,color='red',marker='+',label='Fit max')
                                 plt.close() """
                         else:
+                            #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform)
+                            #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,func)
+                            #plt.show()
                             self.waveform_fit_params.append((popt,perr))
                             x.append([max_x])
                             y.append([max_y])
@@ -243,6 +252,48 @@ class Gat_HPC:  #   Gain Analysis Tool
             self.log('Loading from backup file',1)
             return (self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp, try_loading)
 
+    def __resolve_wf_fit_params(self, voltage):
+        total = len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)
+        temp = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp[1]
+        double = 0
+        late = 0
+
+        
+
+        for waveform in self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp[1:]:
+            pks = find_peaks(waveform,prominence=150,distance=30)[0]
+            if len(pks) > 1:
+                #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform)
+                for pk in pks:
+                    plt.vlines([self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[pk]],0,waveform[pk],colors=['lime'],linestyles='dashed')
+                #plt.show()
+                double += 1
+            elif len(pks) == 1:
+                if self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[pks] > 240: #TODO CHECK THIS LIMIT
+                    #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,color='magenta')
+                    #plt.show()
+                    late += 1
+            for ii, y in enumerate(waveform): temp[ii] = temp[ii] + y
+        avg = [float(t/total) for t in temp]
+        avg = np.asarray(avg)
+        peak_x = np.argmax(avg)
+        peak_A = avg[peak_x]
+        tau_ind = np.where(avg[peak_x:] < (peak_A)*(np.e**-1))[0][0]
+        tau_est = np.abs(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.where(avg[peak_x:] < (peak_A)*(np.e**-1))[0][0]] - self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[peak_x])
+        tau_ind_est = tau_ind-peak_x
+
+        #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,avg)
+        #plt.xlim(180,tau_ind+20)
+        #plt.show()
+        #plt.plot(np.arange(0,len(avg),1),avg)
+        #plt.xlim(np.arange(0,len(avg),1)[180],np.arange(0,len(avg),1)[tau_ind+20])
+        #plt.show()
+        self.log(f'Found tau {tau_est} us to get to {(peak_A)*(np.e**-1)}. Using {total} waveforms for {voltage:.02f} V. Tau-ind-est is {tau_ind_est} waveform indexes',1)
+        self.log(f'Double {double} ({double/total*100}%), late {late} ({late/total*100}%) out of {total} waveforms.',2)
+        
+        self.tau_est_final = tau_est
+        return tau_est  
+
     def __save_coords(self, coords,voltage):
         filename = f'_backup_{voltage:.01f}.bd'
         with open(filename,'w') as file:
@@ -262,12 +313,10 @@ class Gat_HPC:  #   Gain Analysis Tool
         coords = []
         if os.path.exists(filename):
             with open(filename, 'r') as file:
-                print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                 lines = file.readlines()
                 lines = [line.replace('\n','') for line in lines]
                 #pp.pprint(lines)
                 for ii, line in enumerate(lines):
-                    print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
                     if str(line) == '@@@@':
                         str_x = lines[ii-2]
                         str_y = lines[ii-1]
@@ -278,7 +327,7 @@ class Gat_HPC:  #   Gain Analysis Tool
                         x = [float(val) for val in x_vals]
                         y = [float(val) for val in y_vals]
 
-                        coords.append(([x],[y]))
+                        coords.append((x,y))
 
                 file.close()
                 #pp.pprint(coords)
@@ -287,7 +336,6 @@ class Gat_HPC:  #   Gain Analysis Tool
         else: return False
                     
     def __p0estimate(self,waveform,voltage):
-
         temp_peaks_ind = np.asarray(find_peaks(waveform,prominence=30)[0])
         if len(temp_peaks_ind) == 0 or temp_peaks_ind is None:
             self.log('Error loading p0: could not find any peaks',4) 
@@ -304,10 +352,10 @@ class Gat_HPC:  #   Gain Analysis Tool
             return None
         tallest_peak_ind = temp_peaks_ind[np.argmax([waveform[p] for p in temp_peaks_ind])]
         A_est = waveform[tallest_peak_ind]
-        mu_est = self.SiPMs[float(4.00)].Ch[self.CHANNEL].Time[tallest_peak_ind]-6
+        mu_est = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[tallest_peak_ind]-6
         base_est = float(np.mean(waveform[1:10]))
         try:
-            tau_est = np.abs(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.where(waveform[tallest_peak_ind:] < (A_est)**(np.e**-1)+base_est)[0][0]] - self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[tallest_peak_ind])
+            tau_est = np.abs(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.where(waveform[tallest_peak_ind:] < (A_est)*(np.e**-1)+base_est)[0][0]] - self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[tallest_peak_ind])
         except IndexError as e:
             self.log(e,4)
             return None
@@ -317,6 +365,9 @@ class Gat_HPC:  #   Gain Analysis Tool
             plt.show()
             return None
         sigma_est = 1
+
+        if not self.tau_est_final is None: tau_est = self.tau_est_final
+
         self.log(f'Estimating A: {A_est}    mu: {mu_est}    tau: {tau_est}  base: {base_est}    sigma: {sigma_est}',4)
 
         return [mu_est,A_est,tau_est,base_est,sigma_est]
@@ -371,23 +422,18 @@ class Gat_HPC:  #   Gain Analysis Tool
     def peaks_test(self, voltage, maxfev=1000000):
         pass
 
-    def eval_gain(self, voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False):
+    def eval_gain(self, voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False):
         if self.error: self.__throw_error()
         if not float(voltage) in self.voltages:
             self.log('Voltage not available, asked for: '+str(voltage),3) #TODO IMPLEMENT A METHOD THAT CHECKS AND HANDLES VOLTAGES AND CONVERTS THEM
             return False
 
-        mpl.rcParams['figure.dpi']= 200
-        plt.figure(figsize=(10,5))
-        plt.suptitle(f'Overvoltage: {voltage:.02f}V',fontsize=16)
-        plt.subplot(1,2,1)
         peaks_coords = None
         if waveform_fit:
-            peaks_coords = self.eval_waveform_func_fit(voltage)[1]
+            peaks_coords = self.eval_waveform_func_fit(voltage,fix_params=fix_params)[1]
         else: peaks_coords = self.eval_waveform_argmax(voltage)[1]
 
         popt_list, perr_list = None, None
-        print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
         peaks_coords = self.__peak_filter(peaks_coords)
 
         if not find_best:
@@ -418,19 +464,19 @@ class Gat_HPC:  #   Gain Analysis Tool
                 elif perr < 1: print(f' * {x_pos:.16g} \u00b1 {ANSI_GREEN}{perr:.16g}{ANSI_RESET}')
                 else: print(f' * {x_pos:.16g} \u00b1 {perr:.16g}')
                 msg += f' * {x_pos:.10f} \u00b1 {perr:.10f}\n'
-        plt.subplot(1,2,2)
         gain = self.__gain_from_peaks(popt_list,perr_list)
-        plt.show()
         self.gain_evaluation = gain
+        print(f'Memory usage: {tracemalloc.get_traced_memory()[1]/1000000} MB peak')
+        tracemalloc.stop()
         return gain
 
     def __gain_from_peaks(self, popt_list,perr_list):
         data = np.asarray([float(peak[1]) for peak in popt_list])
         errs = np.asarray([float(err) for err in perr_list])
 
-        plt.errorbar(np.arange(1,len(data)+1,1),data,yerr=errs,fmt='o',ms=5,color='red',label='Peaks')
+        #plt.errorbar(np.arange(1,len(data)+1,1),data,yerr=errs,fmt='o',ms=5,color='red',label='Peaks')
         popt, pcov = curve_fit(self.line,np.arange(1,len(data)+1,1),data,sigma=errs)
-        plt.plot(np.arange(1,len(data)+1,1),self.line(np.arange(1,len(data)+1,1),*popt),color='black',ls="--",alpha=0.8)
+        #plt.plot(np.arange(1,len(data)+1,1),self.line(np.arange(1,len(data)+1,1),*popt),color='black',ls="--",alpha=0.8)
         self.log(f'Gain: {popt[1]:.2f} \u00b1 {float(np.sqrt(np.diag(pcov)[1])):.2f}',1)
         self.gain_fit_params = (popt,float(np.sqrt(np.diag(pcov)[1])))
         return (float(popt[1]),float(np.sqrt(np.diag(pcov)[1])))
@@ -439,7 +485,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         fits, errs = [], []
 
         bin_width_start = 1
-        bin_width_stop = 10
+        bin_width_stop = 12
         bin_width_step = 0.5
 
         prominence_start = 10
@@ -484,15 +530,16 @@ class Gat_HPC:  #   Gain Analysis Tool
             for perm in trials.keys():
                 popt_list, perr_list = trials[perm]
                 last = perm
-                combined = float(np.sum(perr_list))
+                num_peaks = len(popt_list)
+                combined = float(np.sum(perr_list))/num_peaks
                 if not True in np.asarray(perr_list) > max_error:
-                    temp_errs.append(combined)
+                    if num_peaks >= min_peaks: temp_errs.append(combined)
                 else: self.log('Not counting for too big err'+str(perr_list),4)
                 if True in np.asarray(temp_errs) < combined: continue
                 else:
                     self.log(np.asarray(temp_errs) < combined,4)
                     self.log(temp_errs,4)
-                    self.log(f'Combined {combined}',4)
+                    self.log(f'Combined/peaks {combined}',4)
                     best = perm
                 done += 1
                 self.log(f'Skipped {skipped} of {done+skipped}',4)
@@ -539,7 +586,6 @@ class Gat_HPC:  #   Gain Analysis Tool
             return self.__get_peaks(peaks_coords,*best,min_peaks,plot=True, is_best=True)
     
     def perm_run(self, perm, peaks_coords, min_peaks,trials, max_error):
-        print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
         popt_list,perr_list = self.__get_peaks(peaks_coords,perm[0],perm[1],perm[2],peaks_min=min_peaks,plot=False)
         if False in perr_list or np.inf in perr_list: pass#skipped += 1
         else:
@@ -556,36 +602,40 @@ class Gat_HPC:  #   Gain Analysis Tool
                 self.log(f'Combined {combined}',4)
                 best = p
             done += 1
-            self.log(f'Skipped {skipped} of {done+skipped}',4) """
-         
-                
+            self.log(f'Skipped {skipped} of {done+skipped}',4) """            
 
-    def __peak_filter(self, peaks_coords):
+    def __peak_filter(self, peaks_coords): #TODO CHECK THAT PEAK IS EXTRACTED FROM FUNCTIONA AND NOT ARG_MAX!!!
         temp = []
+        avg = 0
         for wvf_tuple in peaks_coords:
             x,y = wvf_tuple
             max_index = np.argmax(y)
-            temp.append((max_index,y[max_index]))
-
+            avg = avg + float(x[max_index])
+            temp.append((x[max_index],y[max_index]))
+        self.log(f'Average peak mu is {avg/len(peaks_coords)} for {avg} and {len(peaks_coords)}',2)
         return temp
 
     def __get_peaks(self, peaks_filtered, bin_width, prominence, distance, peaks_min,max_bins=1000,plot=False,is_best=False):
 
         y_data = np.asarray([])
+        x_data = np.asarray([])
         for xy_val in peaks_filtered:
             y_val = xy_val[1]
+            #x_val = xy_val[0]
             y_data = np.append(y_data,y_val) #TODO GET RID OF NEGATIVE PEAKS
+            #x_data = np.append(x_data,x_val) #TODO GET RID OF NEGATIVE PEAKS
             #TODO GET SCALES
  
         #plt.hist(data,bins=np.arange(0,max_bins,bin_width))
-        y,x = np.histogram(y_data,bins=np.arange(0,max_bins,bin_width))
+        y,x = np.histogram(y_data,bins=np.arange(y_data.min(),y_data.max(),bin_width))
         #plt.hist(data,bins=np.arange(0,max_bins,bin_width))
+        #x = np.asarray([x_data[val] for val in x]).reshape(-1)
         x = np.asarray(x).reshape(-1)
         y = np.asarray(y).reshape(-1)
         x = x[:-1]  #   get rid of last bin end value. It makes x > y otherwise.
-        if plot:
-            plt.bar(x,y,color='royalblue',width=bin_width)
-            plt.xlim(0,1000)
+        if plot: pass
+            #plt.bar(x,y,color='royalblue',width=bin_width)
+            #plt.xlim(0,1000)
         if is_best: self.hist_data = (x,y)
         if is_best: self.hist_params = (bin_width, prominence, distance)
 
@@ -617,8 +667,8 @@ class Gat_HPC:  #   Gain Analysis Tool
                 #plt.close()
                 gauss_fits_temp.append((pk_Y,x[peak_index]))
                 gauss_err_temp.append(False)
-                if is_best: plt.scatter([x[peak_index]],[pk_Y],50,color='red',marker='+',label='No fit')
-                if is_best: plt.hlines([pk_Y],0,x[peak_index],linestyles="dotted",colors=['red'],linewidths=0.8)
+                #if is_best: plt.scatter([x[peak_index]],[pk_Y],50,color='red',marker='+',label='No fit')
+                #if is_best: plt.hlines([pk_Y],0,x[peak_index],linestyles="dotted",colors=['red'],linewidths=0.8)
 
                 #peaks_final[0].append((x[peak_index], pk_Y))
                 #peaks_final[1].append((False, False))
@@ -630,11 +680,11 @@ class Gat_HPC:  #   Gain Analysis Tool
                 gauss_fits_temp.append(popt)
                 gauss_err_temp.append(np.sqrt(np.diag(pcov))[1])
                 if np.sqrt(np.diag(pcov))[1] == np.inf and plot: plt.plot(x[cut],self.gauss(x[cut],*popt),'m',label='Bad fit')
-                elif plot: plt.plot(x[cut],self.gauss(x[cut],*popt),'lime',label='Good fit')
+                elif plot: pass#plt.plot(x[cut],self.gauss(x[cut],*popt),'lime',label='Good fit')
 
-                if plot:plt.scatter([real_peak_index],[pk_Y],50,color='green',marker='+')
-                if plot:plt.hlines([pk_Y],0,real_peak_index,linestyles="--",colors=['magenta'],linewidths=0.8)
-                if plot:plt.hlines([popt[0]],0,popt[1],linestyles="--",colors=['green'],linewidths=0.8)
+                #if plot:plt.scatter([real_peak_index],[pk_Y],50,color='green',marker='+')
+                #if plot:plt.hlines([pk_Y],0,real_peak_index,linestyles="--",colors=['magenta'],linewidths=0.8)
+                #if plot:plt.hlines([popt[0]],0,popt[1],linestyles="--",colors=['green'],linewidths=0.8)
 
                 peaks_final[0].append((x[peak_index], pk_Y))
                 peaks_final[1].append((real_peak_index, popt[0]))
@@ -648,30 +698,32 @@ class Gat_HPC:  #   Gain Analysis Tool
     def _plot_hist(self):
         mpl.rcParams['figure.dpi']= 200
         plt.bar(*self.hist_data,color='royalblue',width=self.hist_params[0])
-        plt.xlim(0,1000)
+        plt.xlabel('peak amplitude [mV]')
+        plt.ylabel('peaks [counts]')
+        #plt.xlim(0,1000)
 
     def _plot_hist_fit(self):
         for val in self.hist_fit_params:
             params, xy_tuple = val
             popt, perr = params
-            plt.plot(*xy_tuple,'brown',label='Good fit')
+            plt.plot(*xy_tuple,'lime',label='Good fit',linewidth=1)
         
         for ((est_x, est_y), (real_x, real_y)) in zip(self.peaks_final[0],self.peaks_final[1]):
             plt.hlines([est_y], 0, est_x,linestyles="--",colors=['magenta'],linewidths=0.8)
             plt.hlines([real_y],0,real_x,linestyles="--",colors=['lime'],linewidths=1)
             plt.vlines([est_x], 0, est_y,linestyles="--",colors=['magenta'],linewidths=0.8)
             plt.vlines([real_x],0,real_y,linestyles="--",colors=['lime'],linewidths=1)
+            plt.scatter([real_x],[real_y],50,color='green',marker='+')
 
     def _plot_gain(self):
         data = []
         errs = []
-        print('plotting')
         for (peak,err) in zip(self.peaks_final[1], self.peaks_final_perr):
             data.append(float(peak[0]))
             errs.append(float(err))
-        print(data)
-        print(errs)
         plt.errorbar(np.arange(1,len(data)+1,1),data,yerr=errs,fmt='o',ms=5,color='red',label='Peaks')
+        plt.xticks(np.arange(1,len(data)+1,1))
+        plt.ylabel('peak amplitude [mV]')
         popt, perr = self.gain_fit_params
         plt.plot(np.arange(1,len(data)+1,1),self.line(np.arange(1,len(data)+1,1),*popt),color='black',ls="--",alpha=0.8)
         
@@ -701,7 +753,6 @@ class Gat_HPC:  #   Gain Analysis Tool
 
         plt.show()
             
-
     def gauss(self,x,a,mu,sigma): return (a*np.exp(-0.5*((x-mu)/sigma)**2))
 
     def line(self,x,m,c): return (m*x)+c
