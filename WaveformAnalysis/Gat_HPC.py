@@ -8,6 +8,7 @@ Multi-core processing should be implemented when instantiating this class. Might
 """
 
 # IMPORTS
+from argparse import ArgumentError
 import sys, glob,importlib, latex, itertools, os
 sys.path.insert(0,'../../')
 sys.path.insert(0,'/Library/TeX/texbin/')
@@ -31,14 +32,14 @@ from IPython.display import display
 import scipy.special
 from multiprocessing import Process, Manager, Pool
 import tracemalloc
+import h5py
 
 importlib.reload(Dataset)
 importlib.reload(SiPM)
 importlib.reload(Waveform)
 
 __author__ = "Tiziano Buzzigoli"
-__credits__ = ["Tiziano Buzzigoli", "Peter Maxwell", "Gavin Huttley",
-                    "Matthew Wakefield"]
+__credits__ = ["Tiziano Buzzigoli", "Avinay Bhat"]
 __version__ = "1.0.1"
 #__maintainer__ = "Rob Knight"
 #__email__ = "rob@spot.colorado.edu"
@@ -84,14 +85,29 @@ class Gat_HPC:  #   Gain Analysis Tool
     gain_evaluation = None
     gain_fit_params = []
     tau_est_final = None
+    data_type = 0
+    silenced = False
 
-    def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,force=False,notify=False):
+    mca_gain_eval = (None,None,None)
+
+    MCA = 1
+    RAW = 0
+
+    def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,force=False,notify=False,channel=0,data_type=0):
         tracemalloc.start()
         self.update(60,'INIT')
-        self.source_files = glob.glob(base_regex+filename_regex)
-        self.voltages = [x.split('_')[-2] for x in self.source_files]
-        self.voltages = np.array(sorted([float(x.split('OV')[0]) for x in self.voltages]))
-        self.voltages = np.unique(self.voltages)
+        if data_type == self.RAW:
+            self.source_files = glob.glob(base_regex+filename_regex)
+            self.voltages = [x.split('_')[-2] for x in self.source_files]
+            self.voltages = np.array(sorted([float(x.split('OV')[0]) for x in self.voltages]))
+            self.voltages = np.unique(self.voltages)
+        else:
+            self.source_files = glob.glob(base_regex+'mca_ke*')
+            self.voltages = [x.split('_')[-2] for x in self.source_files]
+            self.voltages = np.array(sorted([float(x.split('OV')[0]) for x in self.voltages]))
+            self.voltages = np.unique(self.voltages)
+        self.CHANNEL = channel #TODO add type check and handle errors related to this
+        self.data_type = data_type
 
         try: voltage = float(voltage)
         except:
@@ -104,6 +120,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             else:
                 self.voltages = [voltage]
         self.notifications = notify
+
 
         if self.source_files is None or len(self.source_files) == 0:
             error = True
@@ -119,7 +136,8 @@ class Gat_HPC:  #   Gain Analysis Tool
             self.silenced = silenced
             self.debug = debug
             self.shaping_time = shaping_time
-            self.load_files(base_regex,filename_regex,force=force)
+            if data_type == self.MCA: self.load_files_MCA(base_regex,'mca_keith',voltage)
+            elif data_type == self.RAW: self.load_files(base_regex,filename_regex,force=force)
             self.log(f'{len(self.source_files)} files and {len(self.voltages)} voltages loaded',1)
 
     def __throw_error(self):
@@ -145,7 +163,24 @@ class Gat_HPC:  #   Gain Analysis Tool
                 if not self.shaping_time is None: self.SiPMs[volt].shaping_time=[self.shaping_time]
                 self.SiPMs[volt].Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPMs[volt].Ch[self.CHANNEL].Amp, cutoff=150)
                 #self.SiPMs[volt].setup_butter_filter() # calculate the butterworth filter coefficients
+
+    def load_files_MCA(self,base_regex,filename_regex,voltage):
         
+        reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
+        print(reg)
+        files = natsorted(glob.glob(reg))
+        self.source_files = files
+        for file in files:
+            f = h5py.File(file, 'r')  
+            ch2 = f.get('ch2')
+            for key in ch2.keys(): 
+                df = np.array(ch2.get(key))
+            h = df[250:]
+            hx = np.arange(0,len(h),1)
+            self.waveforms[file] = (hx,h)
+        
+        self.log(f'Loaded {len(files)} MCA files',1)
+
     def eval_waveform_func_fit(self, voltage, bounds=None,reload=False,fix_params=False):
         #raise(NotImplementedError('Not ready yet!'))
         if self.error: self.__throw_error()
@@ -196,11 +231,11 @@ class Gat_HPC:  #   Gain Analysis Tool
                         lost += 1
                     else:
                         func = self.__wave_func(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,*popt)
-                        peak_x = 0
+                        peak_x = np.argmax(func)
                         print(f'Max {np.asarray(func).max()} ({np.asarray(waveform).max()}) while {popt}')
-                        print(peak_x)
                         max_x,max_y = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[peak_x], func[peak_x]
                         if max_x < bounds[0] or max_x > bounds[1]: self.log(f'Skipping due to peak out of bounds at {max_x}x{max_y}',4)
+                        print(f'Max {max_x}x{max_y} for {peak_x}')
                         self.log(f'Max {max_x}x{max_y}',4)
                         perr = np.sqrt(np.diag(pcov))[1]
 
@@ -280,7 +315,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         peak_A = avg[peak_x]
         tau_ind = np.where(avg[peak_x:] < (peak_A)*(np.e**-1))[0][0]
         tau_est = np.abs(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.where(avg[peak_x:] < (peak_A)*(np.e**-1))[0][0]] - self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[peak_x])
-        tau_ind_est = tau_ind-peak_x
+        tau_ind_est = np.abs(peak_x-tau_ind)
 
         #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,avg)
         #plt.xlim(180,tau_ind+20)
@@ -422,15 +457,10 @@ class Gat_HPC:  #   Gain Analysis Tool
     def peaks_test(self, voltage, maxfev=1000000):
         pass
 
-    def eval_gain(self, voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False):
-        if self.error: self.__throw_error()
-        if not float(voltage) in self.voltages:
-            self.log('Voltage not available, asked for: '+str(voltage),3) #TODO IMPLEMENT A METHOD THAT CHECKS AND HANDLES VOLTAGES AND CONVERTS THEM
-            return False
-
+    def __raw_eval_gain(self,voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False):
         peaks_coords = None
         if waveform_fit:
-            peaks_coords = self.eval_waveform_func_fit(voltage,fix_params=fix_params)[1]
+            peaks_coords = self.eval_waveform_func_fit(voltage,fix_params=fix_params,reload=reload)[1]
         else: peaks_coords = self.eval_waveform_argmax(voltage)[1]
 
         popt_list, perr_list = None, None
@@ -464,11 +494,22 @@ class Gat_HPC:  #   Gain Analysis Tool
                 elif perr < 1: print(f' * {x_pos:.16g} \u00b1 {ANSI_GREEN}{perr:.16g}{ANSI_RESET}')
                 else: print(f' * {x_pos:.16g} \u00b1 {perr:.16g}')
                 msg += f' * {x_pos:.10f} \u00b1 {perr:.10f}\n'
+        print(popt_list)
         gain = self.__gain_from_peaks(popt_list,perr_list)
         self.gain_evaluation = gain
         print(f'Memory usage: {tracemalloc.get_traced_memory()[1]/1000000} MB peak')
         tracemalloc.stop()
         return gain
+
+    def eval_gain(self, voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False,total_bins=None):
+        if self.error: self.__throw_error()
+        if not float(voltage) in self.voltages:
+            self.log('Voltage not available, asked for: '+str(voltage),3) #TODO IMPLEMENT A METHOD THAT CHECKS AND HANDLES VOLTAGES AND CONVERTS THEM
+            return False
+
+        if self.data_type == self.RAW: return self.__raw_eval_gain(voltage,waveform_fit,find_best,bin_width,distance,prominence,min,plot,fix_params,reload)
+
+        if self.data_type == self.MCA: return self.__mca_eval_gain(voltage,total_bins,min)
 
     def __gain_from_peaks(self, popt_list,perr_list):
         data = np.asarray([float(peak[1]) for peak in popt_list])
@@ -610,7 +651,8 @@ class Gat_HPC:  #   Gain Analysis Tool
         for wvf_tuple in peaks_coords:
             x,y = wvf_tuple
             max_index = np.argmax(y)
-            avg = avg + float(x[max_index])
+            if isinstance(x[max_index], float) or isinstance(x[max_index], int): avg = avg + float(x[max_index])
+            else: avg = avg + float(x[max_index][0]) #TODO UNDERSTAND WHY THIS HAPPENS
             temp.append((x[max_index],y[max_index]))
         self.log(f'Average peak mu is {avg/len(peaks_coords)} for {avg} and {len(peaks_coords)}',2)
         return temp
@@ -729,6 +771,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         
     def plot(self, hist=False,hist_fit=False, gain=False):
         if self.error: self.__throw_error()
+        plt.clf()
         mpl.rcParams['figure.dpi']= 200
 
         if hist and not gain:
@@ -756,6 +799,297 @@ class Gat_HPC:  #   Gain Analysis Tool
     def gauss(self,x,a,mu,sigma): return (a*np.exp(-0.5*((x-mu)/sigma)**2))
 
     def line(self,x,m,c): return (m*x)+c
+
+    def line_mca(self,x,a,b): return a*(x-b)
+
+    def rebin(self,hx,h,bins):
+        h_rebin=[]
+        for i in range(int(len(h)/bins)):
+            start_idx=i*bins
+            end_idx=(i+1)*bins
+            h_rebin.append(np.sum(h[start_idx:end_idx]))
+        hx_rebin=range(len(h_rebin))
+        return np.array(hx_rebin), np.array(h_rebin)
+
+    def rebin_center(self,hx,h,bins):
+        h_rebin=[]
+        hx_rebin=[]
+        for i in range(int(len(h)/bins)):
+            start_idx=i*bins
+            end_idx=(i+1)*bins
+            h_rebin.append(np.sum(h[start_idx:end_idx]))
+            hx_rebin.append(np.mean(hx[start_idx:end_idx]))
+        # hx_rebin=range(len(h_rebin))
+        return np.array(hx_rebin), np.array(h_rebin)
+
+    def __mca_eval_gain(self,voltage,total_bins,min_peaks):
+        if total_bins is None: raise(ArgumentError('Specify a number as the total number of bins flag for gat.eval_gain method!'))
+
+        print(f'MCA data -> peaks: {min_peaks}, bins: {total_bins}')
+
+        gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
+        gain_err=[] #empty list to fill in the values of gain fit error, returned at the end of this function
+        calib_pe=[]#empty list to fill in the values for calibrated PE 
+        calib_count=[]
+
+        for file in self.source_files:
+            x, y = self.waveforms[file]
+            x,y = self.rebin(x,y, total_bins)
+
+            gain_temp=[]#reset the gain temp list here to store gain values for one file
+            #Use scipy find_peaks to find peaks starting with a very high prominence 
+            PROMINENCE=1E3 #This prominence is re-set here to ensure that every file starts out with a high prominence
+        
+            peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=80/total_bins)
+            peak_length=len(peaks)
+            #We want to ensure that using a high prominence gives us at least N_peaks peaks to fit a straight line to. If it doesn't we reduce prominence till we get at least 3 peaks. N_peaks is set above
+            while (peak_length < min_peaks+1):
+                PROMINENCE=PROMINENCE-1
+                
+                peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=80/total_bins)
+                peak_length=len(peaks)
+                
+            #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
+            first_pe_max=x[peaks[0]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
+            max_value=y[peaks[0]] # The height of the 3rd peak
+            x_idx_array=(y<0.5*max_value) & (x>first_pe_max)# returns a boolean array where both conditions are true
+            right_side_x= x[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+            sigma_guess=np.abs(first_pe_max-right_side_x) #We need this to fit the width of the Gaussian peaks
+
+        
+            plt.figure(figsize=(12,2)) # Call the figure here
+            plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
+            plt.xlim(0,1000/total_bins)
+            # plt.ylim(0,50)
+            plt.yscale('log')
+            plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
+            plt.plot(x,y,lw=1) #plot the signal
+            cut= (x < first_pe_max+sigma_guess) & (x > first_pe_max-sigma_guess) # This cut helps to fix the width of the peak-fit
+            popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[max_value,first_pe_max,sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+
+            plt.plot(x[cut],self.gauss(x[cut],*popt),color='green',label='Fit',lw=2,alpha=0.5) # Here we plot the fit on the 2nd peak to see if everything looks ok.
+        
+            
+            for i,peak in enumerate(peaks[2:]): #here we ignore the first peak because it could be the pedestal
+                new_first_pe_max=x[peak] #x-value of the peak
+                new_max_value=y[peak] #height of the peak
+                new_x_idx_array=(y<0.5*new_max_value) & (x>new_first_pe_max) # returns a boolean array where both conditions are true
+                new_right_side_x= x[np.where(new_x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+                new_sigma_guess=np.abs(new_first_pe_max-new_right_side_x) #We need this to fit the width of the Gaussian peaks
+
+
+                new_cut= (x < new_first_pe_max+new_sigma_guess) & (x > new_first_pe_max-new_sigma_guess) # This cut helps to fix the width of the peak-fit
+                popt_new,pcov_new=curve_fit(self.gauss,x[new_cut],y[new_cut],p0=[new_max_value,new_first_pe_max,new_sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+                plt.plot(x[new_cut],self.gauss(x[new_cut],*popt_new),color='r',label='Fit',lw=3) # Here we plot the fit on all the peaks
+                gain_temp.append(popt_new[1]) #Here we append the value of the peak fit mean 
+
+            plt.subplot(1,3,2) #This subplot shows the straight line fit to the peak means to obtain the slope/gain
+            if (y[peaks[2]]/total_bins<90): 
+                popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(3,len(peaks)+1),gain_temp,p0=[10,0],maxfev=10000) #Use the straight line fit here
+                plt.plot(np.arange(3,len(peaks)+1),self.line_mca(np.arange(3,len(peaks)+1),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+
+                plt.scatter(np.arange(3,len(peaks)+1),gain_temp,color='r') #plot the values of the peak means
+                plt.legend(loc=2)
+            else:
+                popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(2,len(peaks)),gain_temp,p0=[10,0],maxfev=10000) #Use the straight line fit here
+                plt.plot(np.arange(2,len(peaks)),self.line_mca(np.arange(2,len(peaks)),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+                plt.scatter(np.arange(2,len(peaks)),gain_temp,color='r') #plot the values of the peak means
+                plt.legend(loc=2)
+            
+            gain_list.append(popt_temp[0]) #append the gain values to obtain BV later
+            gain_err.append(np.sqrt(np.diag(pcov_temp))[0]) #append the straight line error fit
+
+            calib_pe.append(x/popt_temp[0]+popt_temp[1])
+            calib_count.append(y)
+
+            plt.subplot(1,3,3)#This subplot shows the calibrated PE spectra
+            plt.plot(x/popt_temp[0]+popt_temp[1],y)
+            plt.yscale('log')
+            plt.xlim(0,5)
+            plt.xticks(np.arange(0,5))
+            plt.grid()
+            plt.suptitle(file, y=1.12)
+            plt.show() #show the plot
+
+        self.mca_gain_eval = (np.array(calib_pe),np.array(calib_count),np.array(gain_list),np.array(gain_err))
+
+    def mca_gain_corrected(self):
+        for x,y,z,r in zip(*self.mca_gain_eval): #z,r are useless and nothing but necessary to unpack with the star
+            plt.figure(figsize=(12,2))
+            plt.subplot(1,3,1)
+            plt.plot(x,y)
+            plt.yscale('log')
+            plt.xlim(0,10)
+            plt.grid()
+            plt.xlabel('PE')
+            plt.ylabel('Count')
+            
+            
+            N_peaks=4
+            PROMINENCE=1E3 #This prominence is re-set here to ensure that every file starts out with a high prominence
+            
+            peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=5)
+            peak_length=len(peaks)
+            
+        #     We want to ensure that using a high prominence gives us at least N_peaks peaks to fit a straight line to. If it doesn't we reduce prominence till we get at least 3 peaks. N_peaks is set above
+            while (peak_length<N_peaks+1):
+                PROMINENCE=PROMINENCE-1
+                    
+                peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=5)
+                peak_length=len(peaks)
+
+
+                
+            plt.plot(x[peaks],y[peaks],'*',ms=5) # plot the peak markers
+            first_pe_max=x[peaks[2]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
+            max_value=y[peaks[2]] # The height of the 3rd peak
+            x_idx_array=(y<0.5*max_value) & (x>first_pe_max)# returns a boolean array where both conditions are true
+            right_side_x= x[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+            sigma_guess=np.abs(first_pe_max-right_side_x) #We need this to fit the width of the Gaussian peaks
+            cut= (x < first_pe_max+sigma_guess) & (x > first_pe_max-sigma_guess) # This cut helps to fix the width of the peak-fit
+            popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[max_value,first_pe_max,sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+            plt.plot(x[cut],self.gauss(x[cut],*popt),color='r',label='Fit',lw=2) # Here we plot the fit on the 2nd peak to see if everything looks ok.
+            
+            params_pe = []
+            params_pe_count=[]
+            for i,peak in enumerate(peaks[2:]): #here we ignore the first peak because it could be the pedestal
+                new_first_pe_max=x[peak] #x-value of the peak
+                new_max_value=y[peak] #height of the peak
+                new_x_idx_array=(y<0.5*new_max_value) & (x>new_first_pe_max) # returns a boolean array where both conditions are true
+                new_right_side_x= x[np.where(new_x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+                new_sigma_guess=np.abs(new_first_pe_max-new_right_side_x) #We need this to fit the width of the Gaussian peaks
+
+
+                new_cut= (x < new_first_pe_max+new_sigma_guess) & (x > new_first_pe_max-new_sigma_guess) # This cut helps to fix the width of the peak-fit
+                popt_new,pcov_new=curve_fit(self.gauss,x[new_cut],y[new_cut],p0=[new_max_value,new_first_pe_max,new_sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+                plt.plot(x[new_cut],self.gauss(x[new_cut],*popt_new),color='r',label='Fit',lw=3) # Here we plot the fit on all the peaks
+                params_pe.append(popt_new[1]) #Here we append the value of the peak fit mean 
+                params_pe_count.append((x[peak]))
+
+            plt.subplot(1,3,2) 
+            plt.scatter(params_pe_count, np.array(params_pe), s=10, zorder=10)
+            popt_line,pcov_line = curve_fit(self.line_mca, params_pe_count, np.array(params_pe), p0=[10,0])
+            plt.plot(params_pe_count, self.line_mca(params_pe_count, *popt_line), color=colors[1], label='Gain: {:.2f} ADC/p.e.'.format(popt_line[0]))
+            #NO_FIELD_pe_corrected_gain.append(popt_line[0])
+            #NO_FIELD_pe_corrected_gain_err.append(np.sqrt(np.diag(pcov_line)[0]))
+            plt.legend(loc=2)
+            plt.grid()
+            plt.xlabel('PE')
+            plt.ylabel('Counts')
+
+
+
+            plt.subplot(1,3,3)
+            #NO_FIELD_calib_pe_updated.append(x/popt_line[0])
+            plt.step(x/popt_line[0],y)
+            plt.yscale('log')
+            plt.xlim(0,10)
+            plt.grid()
+            plt.xlabel('PE')
+            plt.ylabel('Count')
+
+
+
+            plt.tight_layout()
+            plt.show()
+
+    def gain_calculator(self,PATH,N_BINS,N_PEAKS):
+        BINS=N_BINS #Number of bins to rebin the MCA data with
+        N_peaks= N_PEAKS# Number o peaks to use for calculating the gain
+        gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
+        gain_err=[] #empty list to fill in the values of gain fit error, returned at the end of this function
+        calib_pe=[]#empty list to fill in the values for calibrated PE 
+        calib_count=[]
+        Files = glob.glob(PATH+'*mca*.h5')
+        #for loop to loop over all the files
+        for i,file in enumerate(natsorted(Files)):
+            print(file) 
+        
+        
+            f = h5py.File(file, 'r')  
+            ch2 = f.get('ch2')
+            for key in ch2.keys(): 
+                df = np.array(ch2.get(key))
+            h = df[250:]
+            hx = np.arange(0,len(h),1)
+            hx,h = self.rebin(hx,h, BINS)
+            
+
+            gain_temp=[]#reset the gain temp list here to store gain values for one file
+            #Use scipy find_peaks to find peaks starting with a very high prominence 
+            PROMINENCE=1E3 #This prominence is re-set here to ensure that every file starts out with a high prominence
+        
+            peaks,pdict=find_peaks(h,prominence=PROMINENCE,distance=80/BINS)
+            peak_length=len(peaks)
+            #We want to ensure that using a high prominence gives us at least N_peaks peaks to fit a straight line to. If it doesn't we reduce prominence till we get at least 3 peaks. N_peaks is set above
+            while (peak_length<N_peaks+1):
+                PROMINENCE=PROMINENCE-1
+                
+                peaks,pdict=find_peaks(h,prominence=PROMINENCE,distance=80/BINS)
+                peak_length=len(peaks)
+
+            #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
+            first_pe_max=hx[peaks[0]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
+            max_value=h[peaks[0]] # The height of the 3rd peak
+            x_idx_array=(h<0.5*max_value) & (hx>first_pe_max)# returns a boolean array where both conditions are true
+            right_side_x= hx[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+            sigma_guess=np.abs(first_pe_max-right_side_x) #We need this to fit the width of the Gaussian peaks
+
+        
+            plt.figure(figsize=(12,2)) # Call the figure here
+            plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
+            plt.xlim(0,1000/BINS)
+            # plt.ylim(0,50)
+            plt.yscale('log')
+            plt.plot(hx[peaks],h[peaks],'*') # plot the peak markers
+            plt.plot(hx,h,lw=1) #plot the signal
+            cut= (hx < first_pe_max+sigma_guess) & (hx > first_pe_max-sigma_guess) # This cut helps to fix the width of the peak-fit
+            popt,pcov=curve_fit(self.gauss,hx[cut],h[cut],p0=[max_value,first_pe_max,sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+            plt.plot(hx[cut],self.gauss(hx[cut],*popt),color='green',label='Fit',lw=2,alpha=0.5) # Here we plot the fit on the 2nd peak to see if everything looks ok.
+        
+            
+            for i,peak in enumerate(peaks[2:]): #here we ignore the first peak because it could be the pedestal
+                new_first_pe_max=hx[peak] #x-value of the peak
+                new_max_value=h[peak] #height of the peak
+                new_x_idx_array=(h<0.5*new_max_value) & (hx>new_first_pe_max) # returns a boolean array where both conditions are true
+                new_right_side_x= hx[np.where(new_x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+                new_sigma_guess=np.abs(new_first_pe_max-new_right_side_x) #We need this to fit the width of the Gaussian peaks
+
+
+                new_cut= (hx < new_first_pe_max+new_sigma_guess) & (hx > new_first_pe_max-new_sigma_guess) # This cut helps to fix the width of the peak-fit
+                popt_new,pcov_new=curve_fit(self.gauss,hx[new_cut],h[new_cut],p0=[new_max_value,new_first_pe_max,new_sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+                plt.plot(hx[new_cut],self.gauss(hx[new_cut],*popt_new),color='r',label='Fit',lw=3) # Here we plot the fit on all the peaks
+                gain_temp.append(popt_new[1]) #Here we append the value of the peak fit mean 
+
+            plt.subplot(1,3,2) #This subplot shows the straight line fit to the peak means to obtain the slope/gain
+            if (h[peaks[2]]/BINS<90): 
+                popt_temp,pcov_temp=curve_fit(self.line,np.arange(3,len(peaks)+1),gain_temp,p0=[10,0],maxfev=10000) #Use the straight line fit here
+                plt.plot(np.arange(3,len(peaks)+1),self.line(np.arange(3,len(peaks)+1),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+
+                plt.scatter(np.arange(3,len(peaks)+1),gain_temp,color='r') #plot the values of the peak means
+                plt.legend(loc=2)
+            else:
+                popt_temp,pcov_temp=curve_fit(self.line,np.arange(2,len(peaks)),gain_temp,p0=[10,0],maxfev=10000) #Use the straight line fit here
+                plt.plot(np.arange(2,len(peaks)),self.line(np.arange(2,len(peaks)),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+                plt.scatter(np.arange(2,len(peaks)),gain_temp,color='r') #plot the values of the peak means
+                plt.legend(loc=2)
+    
+            
+            gain_list.append(popt_temp[0]) #append the gain values to obtain BV later
+            gain_err.append(np.sqrt(np.diag(pcov_temp))[0]) #append the straight line error fit
+
+            calib_pe.append(hx/popt_temp[0]+popt_temp[1])
+            calib_count.append(h)
+            
+            plt.subplot(1,3,3)#This subplot shows the calibrated PE spectra
+            plt.plot(hx/popt_temp[0]+popt_temp[1],h)
+            plt.yscale('log')
+            plt.xlim(0,5)
+            plt.xticks(np.arange(0,5))
+            plt.grid()
+            plt.show() #show the plot
+
+        return(np.array(calib_pe),np.array(calib_count),np.array(gain_list),np.array(gain_err))
 
     def log(self, message, level, notify=0):
         curframe = inspect.currentframe()
