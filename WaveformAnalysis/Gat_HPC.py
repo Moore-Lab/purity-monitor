@@ -71,9 +71,9 @@ class Gat_HPC:  #   Gain Analysis Tool
     CHANNEL = 0 # TODO SET A CHANNEL FROM WHICH TO TAKE WAVEFORM DATA
     source_files = []
     max_bins = 10000
-    voltages = []
+    voltage = None
     error = True
-    SiPMs = {}
+    SiPM = None
     shaping_time = 1e-5
     waveforms = {}
     waveform_fit_params = []
@@ -94,18 +94,12 @@ class Gat_HPC:  #   Gain Analysis Tool
     RAW = 0
 
     def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,force=False,notify=False,channel=0,data_type=0):
+
         tracemalloc.start()
+        self.debug = debug
+        self.notifications = notify
+        self.silenced = silenced
         self.update(60,'INIT')
-        if data_type == self.RAW:
-            self.source_files = glob.glob(base_regex+filename_regex)
-            self.voltages = [x.split('_')[-2] for x in self.source_files]
-            self.voltages = np.array(sorted([float(x.split('OV')[0]) for x in self.voltages]))
-            self.voltages = np.unique(self.voltages)
-        else:
-            self.source_files = glob.glob(base_regex+'mca_ke*')
-            self.voltages = [x.split('_')[-2] for x in self.source_files]
-            self.voltages = np.array(sorted([float(x.split('OV')[0]) for x in self.voltages]))
-            self.voltages = np.unique(self.voltages)
         self.CHANNEL = channel #TODO add type check and handle errors related to this
         self.data_type = data_type
 
@@ -114,60 +108,81 @@ class Gat_HPC:  #   Gain Analysis Tool
             error = True
             raise(TypeError(f'Inappropriate argument provided for voltage: int or float expected but {voltage} ({type(voltage)}) was given.'))
         else:
-            if not voltage in self.voltages:
+            if not self.__check_available(voltage,base_regex,filename_regex):
                 error = True
-                raise(ValueError(f'The voltage you requested ({voltage}) is not available among the files you selected.'))
+                raise(ValueError(f'The voltage you requested ({voltage}) is not available. Try modifying the directory and/or filename you requested.'))
             else:
-                self.voltages = [voltage]
-        self.notifications = notify
-
+                self.voltage = float(voltage)
 
         if self.source_files is None or len(self.source_files) == 0:
             error = True
             raise(FileNotFoundError('Unable to locate source files located at '+(base_regex+filename_regex)))
-        elif self.voltages is None or len(self.voltages) == 0:
+        elif self.voltage is None:
             self.error = True
             raise(FileNotFoundError('The files you are trying to load are missing voltage information in their names i.e.'+self.source_files[0]))
         elif not shaping_time is None and not type(shaping_time) is type(1e-1):
             self.error = True
-            raise(ValueError('Shaping time must be a number. Only one shaping time per Gat object is allowed'))
+            raise(ValueError('Shaping time must be a number (i.e. 1e-1). Only one shaping time per Gat instance is allowed'))
         else:
             self.error = False
-            self.silenced = silenced
-            self.debug = debug
             self.shaping_time = shaping_time
-            if data_type == self.MCA: self.load_files_MCA(base_regex,'mca_keith',voltage)
-            elif data_type == self.RAW: self.load_files(base_regex,filename_regex,force=force)
-            self.log(f'{len(self.source_files)} files and {len(self.voltages)} voltages loaded',1)
+            if data_type == self.MCA: self.__load_files_MCA(base_regex,filename_regex,voltage)
+            elif data_type == self.RAW: self.__load_files(base_regex,filename_regex)
+            if self.SiPM is None: self.log(f'FATAL ERROR: Could not load files for {base_regex+filename_regex} !',3)
+            elif self.data_type == self.MCA: self.log(f'{len(self.source_files)} files of MCA data loaded for {self.voltage:.02f} OV',1)
+            elif self.data_type == self.RAW: self.log(f'{len(self.source_files)} files of RAW data loaded for {self.voltage:.02f} OV',1)
+
+    def __check_available(self, voltage, base_regex, filename_regex): 
+        voltages = []
+        if self.data_type == self.RAW:
+            self.source_files = glob.glob(base_regex+filename_regex)
+            voltages = [x.split('_')[-2] for x in self.source_files]
+            voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
+            voltages = np.unique(voltages)
+        else:
+            self.source_files = glob.glob(base_regex+filename_regex)
+            voltages = [x.split('_')[-2] for x in self.source_files]
+            voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
+            voltages = np.unique(voltages)
+
+        if float(voltage) in voltages: return True
+        return False
 
     def __throw_error(self):
-        raise(RuntimeError('The Gat object you are attempting to call has experienced an unexpected error and is unable to perform the method you requried at this time'))
+        raise(RuntimeError('The Gat object you are attempting to reach has experienced an unexpected error and is unable to perform the method you called at this time')) #TODO make error more descriptive so that you can reprint it here
 
-    def load_files(self,base_regex,filename_regex,force=False):
+    def force_reload(self,base_regex,filename_regex):
+        self.SiPM = None
+        if self.data_type == self.RAW: self.__load_files(base_regex,filename_regex)
+        else: self.log('Force reload only applies to RAW waveform data. This GAT instance is set to MCA data.',2)
+
+    def __load_files(self,base_regex,filename_regex):
         if self.error: self.__throw_error()
-        if len(self.SiPMs.keys()) > 0 and not force:
-            self.log('WARNING: files already loaded! Use the force optional argument to force load.',2)
+
+        if not self.SiPM is None:
+            self.log('WARNING: files already loaded!',2)
             return
-        if len(self.SiPMs.keys()) > 0 and force:
-            self.log('Forcing to reload files....',2)
+        
+        self.SiPM = SiPM.SiPM(Path=base_regex, Selection=filename_regex+'_{:.2f}OV*.h5'.format(self.voltage))
+        self.log(f'Loading {filename_regex}_{self.voltage:.2f}OV*.h5 returned {len(self.SiPM.Files)} files',4)
+        self.SiPM.Ch = [Waveform.Waveform(ID=x, Pol=1) for x in range(1,3)]
 
-        for volt in self.voltages:
-            self.SiPMs[volt] = SiPM.SiPM(Path=base_regex, Selection=filename_regex+'_{:.2f}OV*.h5'.format(volt))
-            self.log(f'Loading {filename_regex}_{volt:.2f}OV*.h5 returned {len(self.SiPMs[volt].Files)} files',4)
-            self.SiPMs[volt].Ch = [Waveform.Waveform(ID=x, Pol=1) for x in range(1,3)]
+        for file in natsorted(self.SiPM.Files):
+            print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
+            self.SiPM.ImportDataFromHDF5(file, self.SiPM.Ch, var=[])
+            self.SiPM.get_sampling()
+            if not self.shaping_time is None: self.SiPM.shaping_time=[self.shaping_time]
+            self.SiPM.Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPM.Ch[self.CHANNEL].Amp, cutoff=150)
+            #self.SiPMs[volt].setup_butter_filter() # calculate the butterworth filter coefficients
+        if len(self.SiPM.Files) == 0: self.SiPM = None
+        print()
+        print()
+        self.eval_waveform_func_fit(fix_params=True)
 
-            for file in natsorted(self.SiPMs[volt].Files):
-                print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
-                self.SiPMs[volt].ImportDataFromHDF5(file, self.SiPMs[volt].Ch, var=[])
-                self.SiPMs[volt].get_sampling()
-                if not self.shaping_time is None: self.SiPMs[volt].shaping_time=[self.shaping_time]
-                self.SiPMs[volt].Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPMs[volt].Ch[self.CHANNEL].Amp, cutoff=150)
-                #self.SiPMs[volt].setup_butter_filter() # calculate the butterworth filter coefficients
-
-    def load_files_MCA(self,base_regex,filename_regex,voltage):
+    def __load_files_MCA(self,base_regex,filename_regex,voltage):
+        if self.error: self.__throw_error()
         
         reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
-        print(reg)
         files = natsorted(glob.glob(reg))
         self.source_files = files
         for file in files:
@@ -178,225 +193,360 @@ class Gat_HPC:  #   Gain Analysis Tool
             h = df[250:]
             hx = np.arange(0,len(h),1)
             self.waveforms[file] = (hx,h)
+            self.SiPM = 'Set'
         
-        self.log(f'Loaded {len(files)} MCA files',1)
-
-    def eval_waveform_func_fit(self, voltage, bounds=None,reload=False,fix_params=False):
-        #raise(NotImplementedError('Not ready yet!'))
+    def eval_waveform_func_fit(self, bounds=None,reload=False,fix_params=False):
         if self.error: self.__throw_error()
-        voltage = float(voltage)
-        if type(voltage) == float: pass
+
+        if bounds is None: bounds = [0,len(self.SiPM.Ch[self.CHANNEL].Amp[0])]
+        elif isinstance(bounds[0],int) and isinstance(bounds[1],int): bounds = bounds
         else:
-            self.error = True
-            raise ValueError('Parameter voltage must be of type float or int. '+str(type(voltage))+' found instead')
+            self.log('The bounds provided are not of the right format and WILL BE IGNORED. Try [int, int].',2)
+            bounds = [0,len(self.SiPM.Ch[self.CHANNEL].Amp[0])]
 
-        if bounds is None: bounds = [0,len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp[0])]
 
-        try_loading = self.__open_coords(voltage)
-        if not try_loading or reload:
+        fit_params = self.__open_coords()
+        if not fit_params or reload:
 
-            coords = [] #   x,y coordinate arrays organized in one tuple per waveform
-            pks_tally = 0 #     keep track of how many peaks are found
-            lost = 0
+            coords = []     #   x,y coordinate arrays organized in one tuple per waveform
+            pks_tally = 0   #   keep track of how many peaks are found
+            lost = 0        #   keep track of how many waveforms are discarded
 
-            self.log(f'Getting {len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)} waveforms for {voltage:.2f}V [{bounds[0]}:{bounds[1]}]',1)
+            self.log(f'Getting {len(self.SiPM.Ch[self.CHANNEL].Amp)} waveforms for {self.voltage:.2f} OV [{bounds[0]}:{bounds[1]}]',1)
 
-            f = IntProgress(value=0,min=0,max=len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp),step=1,description='Loading fit...',bar_style='info',layout={"width": "100%"})
+            f = IntProgress(value=0,min=0,max=len(self.SiPM.Ch[self.CHANNEL].Amp),step=1,description='Fitting waveforms',bar_style='info',layout={"width": "100%"})
             display(f)
 
-            diffs = []
+            intervals = []
+
+            fit_params = []
 
             if fix_params:
-                self.__resolve_wf_fit_params(voltage)
+                self.__resolve_wf_fit_params()
+                if self.tau_est_final is None:
+                    self.log(f'Failed to load tau estimate. Skipping waveform tau estimate.',2)
+                    fix_params=False
 
-            for waveform in self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp: #loop over the waveforms inside the file
+            for waveform in self.SiPM.Ch[self.CHANNEL].Amp: #loop over the waveforms inside the file
+
+                if not self.__check_waveform(waveform)[0]:
+                    lost += 1
+                    continue
+
                 x = [] #    must be same lenght as y. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methods).
                 y = [] #    must be same length as x. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methos).
                 f.value += 1
                 start = datetime.now()
-                p0 = self.__p0estimate(waveform,voltage)
-                
+                p0 = self.__p0estimate(waveform)
                 if p0 is None:
                     self.log('Error loading p0',4)
                     lost += 1
                     continue
+                if fix_params: p0 = [p0[0],p0[1],p0[3],p0[4]]
                 
                 popt,pcov = None, None
                 try:
-                    popt,pcov = curve_fit(self.__wave_func,self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,p0=p0,maxfev=1000000)
+                    if not fix_params: popt,pcov = curve_fit(self.__wave_func,self.SiPM.Ch[self.CHANNEL].Time,waveform,p0=p0,maxfev=10000000)
+                    if fix_params and not self.tau_est_final is None: popt,pcov = curve_fit(self.__wave_func2,self.SiPM.Ch[self.CHANNEL].Time,waveform,p0=p0,maxfev=10000000)
                 except Exception as e:
                     self.log(e,3)
                 else:
                     if popt is None or pcov is None:
                         lost += 1
+
                     else:
-                        func = self.__wave_func(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,*popt)
+                        func = None
+                        print(f'Will fit with {p0} and tau final {self.tau_est_final}')
+                        if not fix_params: func = self.__wave_func(self.SiPM.Ch[self.CHANNEL].Time,*popt)
+                        if fix_params: func = self.__wave_func2(self.SiPM.Ch[self.CHANNEL].Time,*popt)
                         peak_x = np.argmax(func)
-                        print(f'Max {np.asarray(func).max()} ({np.asarray(waveform).max()}) while {popt}')
-                        max_x,max_y = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[peak_x], func[peak_x]
-                        if max_x < bounds[0] or max_x > bounds[1]: self.log(f'Skipping due to peak out of bounds at {max_x}x{max_y}',4)
-                        print(f'Max {max_x}x{max_y} for {peak_x}')
+                        #print(f'Max {np.asarray(func).max()} ({np.asarray(waveform).max()}) while {popt}')
+                        max_x,max_y = self.SiPM.Ch[self.CHANNEL].Time[peak_x], func[peak_x]
+                        """if max_x < bounds[0] or max_x > bounds[1]:
+                            self.log(f'Skipping due to peak out of bounds at {max_x}x{max_y}',4)
+                            continue"""
+                        #print(f'Max {max_x}x{max_y} for {peak_x}')
                         self.log(f'Max {max_x}x{max_y}',4)
                         perr = np.sqrt(np.diag(pcov))[1]
 
-                        if perr > 1.0:
+                        calc_tau = int(round(popt[2],0))
+                        calc_tau2 = int(round((popt[2]/0.5122501221299463),0))
+                        calc_tau3 = int(round((popt[2]*0.5122501221299463),0))
+                        print(waveform[int(peak_x+calc_tau2)])
+                        print(calc_tau3)
+                        print(f'Value at tau: {waveform[int(peak_x+calc_tau2)]} for tau {calc_tau2} and peak {func[peak_x]}')
+
+                        if perr > 0:
                             lost += 1
                             self.log(f'Perr {perr}',4)
                             possible_pks = find_peaks(waveform,prominence=40)[0]
-                            """ plt.title(f'P_error: {perr:.5f}')
+                            plt.figure(figsize=(8,8))
+                            plt.title(f'P_error: {perr:.5f}')
+                            plt.xlim(180,400)
+                            print(popt)
                             if len(possible_pks) > 1:
                                 for p in possible_pks:
-                                    ppk_x = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[p]
+                                    ppk_x = self.SiPM.Ch[self.CHANNEL].Time[p]
                                     ppk_y = waveform[p]
-                                    ax.scatter([ppk_x],[ppk_y],50,color='magenta',marker=11,zorder=4)
-                                ax.scatter([max_x],[max_y],50,color='blue',marker='+',label='Fit max',zorder=3)
-                                ax.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,func,color='red',alpha=0.8,zorder=2)
-                                ax.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,zorder=1)
-                                fig.canvas.draw()
-                                fig.canvas.flush_events()
+                                    plt.scatter([ppk_x],[ppk_y],50,color='magenta',marker=11,zorder=4)
+                                plt.scatter([max_x],[max_y],50,color='red',marker='+',label='Fit max',zorder=3)
+                                plt.plot(self.SiPM.Ch[self.CHANNEL].Time,func,color='red',alpha=0.8,zorder=2)
+                                plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,zorder=1)
+                                plt.show()
                             else:
-                                continue
-                                plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,color='purple')
-                                plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,func,color='lime',alpha=0.8)
-                                plt.scatter([max_x],[max_y],50,color='red',marker='+',label='Fit max')
-                                plt.close() """
+                                
+                                plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='purple')
+                                plt.plot(self.SiPM.Ch[self.CHANNEL].Time,func,color='lime',alpha=0.8)
+                                plt.scatter([max_x],[max_y],50,color='blue',marker='+',label='Fit max')
+                                plt.show()
                         else:
-                            #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform)
-                            #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,func)
+                            #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform)
+                            #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,func)
                             #plt.show()
                             self.waveform_fit_params.append((popt,perr))
                             x.append([max_x])
                             y.append([max_y])
                             pks_tally += 1
                             coords.append((x,y))
+                            fit_params.append({'x':self.SiPM.Ch[self.CHANNEL].Time,'popt':popt,'chi':None,'perr':perr})
                 
                 end = datetime.now()
-                diffs.append((end-start).total_seconds())
-                if f.value % 30 == 0: self.update(int(((np.mean(diffs)*(len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)-f.value)))),'FUNC%20FIT')
-                print(f'Estimated time to completion: {float(np.mean(diffs)*(len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)-f.value)/60):.01f} minutes',end='\r')
+                intervals.append((end-start).total_seconds())
+                if f.value % 30 == 0: self.update(int(((np.mean(intervals)*(len(self.SiPM.Ch[self.CHANNEL].Amp)-f.value)))),'FUNC%20FIT')
+                print(f'Estimated time to completion: {float(np.mean(intervals)*(len(self.SiPM.Ch[self.CHANNEL].Amp)-f.value)/60):.01f} minutes',end='\r')
 
-                if len(diffs) == 5: self.notify('Initated fit calc.',f'ETC: {float(np.mean(diffs)*(len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)-f.value)/60):.01f} minutes',0)
+                if len(intervals) == 5: self.notify('Initated fit calc.',f'ETC: {float(np.mean(intervals)*(len(self.SiPM.Ch[self.CHANNEL].Amp)-f.value)/60):.01f} minutes',0)
             
-            if len(x) != len(y): raise(RuntimeError('Returning list of peak coordinates of different lengths. x: '+str(len(x))+ ' y: '+str(len(y))+' for '+str(len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp))+' waveforms'))
+            if len(x) != len(y): raise(RuntimeError('Returning list of peak coordinates of different lengths. x: '+str(len(x))+ ' y: '+str(len(y))+' for '+str(len(self.SiPM.Ch[self.CHANNEL].Amp))+' waveforms'))
 
-            self.log(f'{pks_tally} peaks found for {len(self.SiPMs[voltage].Ch[self.CHANNEL].Amp)} waveforms. Loss: {lost} ({(float(lost/pks_tally))*100:.02f}%)',1)
+            if pks_tally > 0: self.log(f'{pks_tally} peaks found for {len(self.SiPM.Ch[self.CHANNEL].Amp)} waveforms. Loss: {lost} ({(float(lost/pks_tally))*100:.02f}%)',1)
+            else: self.log('No peaks found. Lost: '+str(lost),2)
 
-            self.__save_coords(coords,voltage)
-            return (self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp, coords)
+            self.__save_coords(fit_params)
+            return (self.SiPM.Ch[self.CHANNEL].Amp, coords)
         elif not reload:
             self.log('Loading from backup file',1)
-            return (self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp, try_loading)
+        
+        self.log(f'{len(fit_params)} waveforms loaded.',1)
 
-    def __resolve_wf_fit_params(self, voltage):
-        total = len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)
-        temp = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp[1]
+        if len(fit_params) > 0:
+
+            for fit in fit_params:
+
+                x_ax = fit['x']
+                popt = fit['popt']
+                chi = fit['chi']
+                perr = fit['perr']
+
+                model = self.__wave_func(x_ax,*popt)
+                #plt.plot(x_ax,model)
+                #plt.show()
+                p_max = float(popt[1])
+                p_x = float(popt[0])
+                a_max_x = np.argmax(model)
+                a_max = float(model[a_max_x])
+                a_x = float(x_ax[a_max_x])
+                print(np.abs(p_max-a_max))
+                print(f'ARGMAX: {p_max} at {p_x}.')
+                print(f'A VAL: {a_max} at {a_x}.')
+                print()
+                if (np.abs(p_max-a_max) > 20):
+                    plt.plot(x_ax,model)
+                    plt.show()
+                #print('Max would be '+str(popt[1]))
+                #print('Max would also be '+str(np.max(model)))
+                #sys.exit()
+
+        else:
+            self.log('Something went wrong while loading fit_params.',3)
+            self.error = True
+            return False
+
+    def __check_waveform(self, waveform):
+        pks = find_peaks(waveform,prominence=150,distance=30)[0]
+        if len(pks) > 1:
+            #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform)
+            #for pk in pks:
+                #plt.vlines([self.SiPM.Ch[self.CHANNEL].Time[pk]],0,waveform[pk],colors=['lime'],linestyles='dashed')
+            #plt.show()
+            #plt.savefig(f'{folder}/double1_{ii}.png',dpi=200,facecolor='white')
+            return (False, 1)
+        elif len(pks) == 1:
+            if self.SiPM.Ch[self.CHANNEL].Time[pks] > 240 or self.SiPM.Ch[self.CHANNEL].Time[pks] < 180: #TODO CHECK THIS LIMIT
+                #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='purple')
+                #plt.show()
+                return (False, 2)
+                #plt.savefig(f'{folder}/timing_{ii}.png',dpi=200,facecolor='white')
+            else:
+                pks2 = find_peaks(waveform,prominence=80,distance=20)[0]
+                if len(pks2) > 1:
+                    return (False, 3)
+                    #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='deepskyblue')
+                    #for pk in pks2:
+                        #plt.vlines([self.SiPM.Ch[self.CHANNEL].Time[pk]],0,waveform[pk],colors=['lime'],linestyles='dashed')
+                    #plt.show()
+                    #plt.title(str([round(self.SiPM.Ch[self.CHANNEL].Time[p],2) for p in pks2]))
+                    #plt.savefig(f'{folder}/double2_{ii}.png',dpi=200,facecolor='white')
+                else: return (True,True)
+        return (True,True)       
+                
+
+    def __resolve_wf_fit_params(self):
+        total = len(self.SiPM.Ch[self.CHANNEL].Amp)
+        temp = [0]*len(self.SiPM.Ch[self.CHANNEL].Amp[1])
         double = 0
         late = 0
 
-        
+        fig1 = plt.figure()
 
-        for waveform in self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp[1:]:
+        to_plt = []
+
+        #folder = str(datetime.now().timestamp()) + '_' + str(self.voltage)
+        #os.mkdir(folder)
+
+        for ii, waveform in enumerate(self.SiPM.Ch[self.CHANNEL].Amp):
+            plt.clf()
             pks = find_peaks(waveform,prominence=150,distance=30)[0]
             if len(pks) > 1:
-                #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform)
-                for pk in pks:
-                    plt.vlines([self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[pk]],0,waveform[pk],colors=['lime'],linestyles='dashed')
+                #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform)
+                #for pk in pks:
+                    #plt.vlines([self.SiPM.Ch[self.CHANNEL].Time[pk]],0,waveform[pk],colors=['lime'],linestyles='dashed')
                 #plt.show()
+                #plt.savefig(f'{folder}/double1_{ii}.png',dpi=200,facecolor='white')
                 double += 1
             elif len(pks) == 1:
-                if self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[pks] > 240: #TODO CHECK THIS LIMIT
-                    #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,color='magenta')
+                if self.SiPM.Ch[self.CHANNEL].Time[pks] > 240 or self.SiPM.Ch[self.CHANNEL].Time[pks] < 180: #TODO CHECK THIS LIMIT
+                    #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='purple')
                     #plt.show()
                     late += 1
-            for ii, y in enumerate(waveform): temp[ii] = temp[ii] + y
+                    #plt.savefig(f'{folder}/timing_{ii}.png',dpi=200,facecolor='white')
+                else:
+                    pks2 = find_peaks(waveform,prominence=80,distance=20)[0]
+                    if len(pks2) > 1:
+                        double += 1
+                        #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='deepskyblue')
+                        #for pk in pks2:
+                            #plt.vlines([self.SiPM.Ch[self.CHANNEL].Time[pk]],0,waveform[pk],colors=['lime'],linestyles='dashed')
+                        #plt.show()
+                        #plt.title(str([round(self.SiPM.Ch[self.CHANNEL].Time[p],2) for p in pks2]))
+                        #plt.savefig(f'{folder}/double2_{ii}.png',dpi=200,facecolor='white')
+                        continue
+                    for ii, y in enumerate(waveform): temp[ii] = temp[ii] + y
+                    to_plt.append(waveform)
+        plt.figure(figsize=(16,5))
+        for tp in to_plt:
+            plt.subplot(1,2,1)
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,tp,color='black')
+        #plt.show()
+        #plt.savefig(f'{folder}/cleaned.png',dpi=200,facecolor='white')
+        for wave in self.SiPM.Ch[self.CHANNEL].Amp:
+            plt.subplot(1,2,2)
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,wave,color='navy')
+        plt.show()
+        #plt.savefig(f'{folder}/all.png',dpi=200,facecolor='white')
+        if len(temp) == 0:
+            self.log('Empty array -> cannot estimate tau',3)
+            return
         avg = [float(t/total) for t in temp]
         avg = np.asarray(avg)
         peak_x = np.argmax(avg)
         peak_A = avg[peak_x]
-        tau_ind = np.where(avg[peak_x:] < (peak_A)*(np.e**-1))[0][0]
-        tau_est = np.abs(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.where(avg[peak_x:] < (peak_A)*(np.e**-1))[0][0]] - self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[peak_x])
-        tau_ind_est = np.abs(peak_x-tau_ind)
+        tau_end_val = peak_A*np.e**-1
+        tau_ind = np.where(avg[peak_x:] < tau_end_val)[0][0]
+        tau_est = self.SiPM.Ch[self.CHANNEL].Time[tau_ind]
 
-        #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,avg)
+        #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,avg)
         #plt.xlim(180,tau_ind+20)
         #plt.show()
         #plt.plot(np.arange(0,len(avg),1),avg)
         #plt.xlim(np.arange(0,len(avg),1)[180],np.arange(0,len(avg),1)[tau_ind+20])
         #plt.show()
-        self.log(f'Found tau {tau_est} us to get to {(peak_A)*(np.e**-1)}. Using {total} waveforms for {voltage:.02f} V. Tau-ind-est is {tau_ind_est} waveform indexes',1)
+        self.log(f'Found tau {tau_est} us to get from {peak_A} to {tau_end_val}. Using {total} waveforms for {self.voltage:.02f} OV. Tau-ind-est is {tau_ind} waveform indexes',1)
         self.log(f'Double {double} ({double/total*100}%), late {late} ({late/total*100}%) out of {total} waveforms.',2)
         
         self.tau_est_final = tau_est
         return tau_est  
 
-    def __save_coords(self, coords,voltage):
-        filename = f'_backup_{voltage:.01f}.bd'
-        with open(filename,'w') as file:
-            for coordinates in coords:
-                x = coordinates[0][0]
-                y = coordinates[1][0]
-                str_x = ''
-                str_y = ''
-                for x_coord in x: str_x += str(float(x_coord))+'%'
-                for y_coord in y: str_y += str(float(y_coord))+'%'
-                file.write(str_x[:-1]+'\n'+str_y[:-1]+'\n'+'@@@@'+'\n')
-            file.close()
-        return True
+    def __save_coords(self, fit_params):
+        if not os.path.exists('./waveform_fits_data'): os.mkdir('waveform_fits_data')
+        filename = f'./waveform_fits_data/_backup_{self.voltage:.01f}'
+
+        x_axes = []
+        popts = []
+        chis = []
+        perrs = []
+
+        for fit in fit_params:
+            x_axes.append(fit['x'])
+            popts.append(fit['popt'])
+            chis.append(fit['chi'])
+            perrs.append(fit['perr'])
+        
+        if len(x_axes) == len(popts) == len(chis) == len(perrs):
+            try: pass#np.savez_compressed(filename, x_axes=x_axes, popts=popts, chis=chis, perrs=perrs)
+            except: pass
+            else:
+                if os.path.exists(filename+'.npz'):
+                    self.log(f'{self.voltage:.02f} OV raw waveforms\' fit parameters saved successifully as {filename}',1)
+                    return True
+        
+        self.log(f'Something went wrong while saving {filename}. Fit parameters will need to be reloaded at each run.',3)
+        return False
     
-    def __open_coords(self,voltage):
-        filename = f'_backup_{voltage:.01f}.bd'
-        coords = []
+    def __open_coords(self):
+        filename = f'./waveform_fits_data/_backup_{self.voltage:.01f}.npz'
+        fit_params = []
+
         if os.path.exists(filename):
-            with open(filename, 'r') as file:
-                lines = file.readlines()
-                lines = [line.replace('\n','') for line in lines]
-                #pp.pprint(lines)
-                for ii, line in enumerate(lines):
-                    if str(line) == '@@@@':
-                        str_x = lines[ii-2]
-                        str_y = lines[ii-1]
 
-                        x_vals = str_x.split('%')
-                        y_vals = str_y.split('%')
+            file = None
+            try: file = np.load(filename,allow_pickle=True)
+            except: return False
+            else:
+                self.log(f'{filename} retreived successifully.',1)
 
-                        x = [float(val) for val in x_vals]
-                        y = [float(val) for val in y_vals]
+                x_axes = file['x_axes'] 
+                popts = file['popts']
+                chis = file['chis']
+                perrs = file['perrs']
 
-                        coords.append((x,y))
+                if len(x_axes) == len(popts) == len(chis) == len(perrs):
+                    for ii in np.arange(0,len(x_axes),1):
+                        fit_params.append({'x':x_axes[ii],'popt':popts[ii],'chi':chis[ii],'perr':perrs[ii]})
+                    return fit_params
+                else:
+                    self.log(f'Error loading arrays from {filename}.',2)
+                    return False
 
-                file.close()
-                #pp.pprint(coords)
-                return coords
-                #for line in file.readlines():
         else: return False
                     
-    def __p0estimate(self,waveform,voltage):
+    def __p0estimate(self,waveform):
         temp_peaks_ind = np.asarray(find_peaks(waveform,prominence=30)[0])
         if len(temp_peaks_ind) == 0 or temp_peaks_ind is None:
             self.log('Error loading p0: could not find any peaks',4) 
-            #plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,color='magenta')
+            #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='magenta')
             #plt.show()
             return None
         
         LIMIT = 800
-        temp_peaks_ind = temp_peaks_ind[(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[temp_peaks_ind]<LIMIT)]
+        temp_peaks_ind = temp_peaks_ind[(self.SiPM.Ch[self.CHANNEL].Time[temp_peaks_ind]<LIMIT)]
         if len(temp_peaks_ind) == 0:
-            plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,color='magenta')
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='magenta')
             plt.show()
             self.log('Error loading p0: could not find any peaks below '+str(LIMIT),4) 
             return None
         tallest_peak_ind = temp_peaks_ind[np.argmax([waveform[p] for p in temp_peaks_ind])]
         A_est = waveform[tallest_peak_ind]
-        mu_est = self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[tallest_peak_ind]-6
+        mu_est = self.SiPM.Ch[self.CHANNEL].Time[tallest_peak_ind]-6
         base_est = float(np.mean(waveform[1:10]))
         try:
-            tau_est = np.abs(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[np.where(waveform[tallest_peak_ind:] < (A_est)*(np.e**-1)+base_est)[0][0]] - self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time[tallest_peak_ind])
+            tau_est = np.abs(self.SiPM.Ch[self.CHANNEL].Time[np.where(waveform[tallest_peak_ind:] < (A_est)*(np.e**-1)+base_est)[0][0]] - self.SiPM.Ch[self.CHANNEL].Time[tallest_peak_ind])
         except IndexError as e:
             self.log(e,4)
             return None
         except Exception as e: #when is index 0 out of bounds it is because the np.where function does not return any true values because that condition is never meth because it is not a regular wave. Probably just noise.
             self.log(f'Estimate error ({type(e)}: {e}',3)
-            plt.plot(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Time,waveform,color='brown')
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,color='brown')
             plt.show()
             return None
         sigma_est = 1
@@ -417,6 +567,11 @@ class Gat_HPC:  #   Gain Analysis Tool
         est_tau2 = Ds[volt].Ch[0].Time[prob_return_x] - Ds[volt].Ch[0].Time[prob_rise_x]
 
     def __wave_func(self, x, mu, A, tau, base,sigma):
+        if not self.tau_est_final is None: tau = self.tau_est_final
+        return base + A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
+
+    def __wave_func2(self, x, mu, A, base,sigma):
+        tau = self.tau_est_final
         return base + A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
 
     def eval_waveform_argmax(self, voltage, bounds=None):
@@ -427,15 +582,15 @@ class Gat_HPC:  #   Gain Analysis Tool
             self.error = True
             raise ValueError('Parameter voltage must be of type float or int. '+str(type(voltage))+' found instead')
 
-        if bounds is None: bounds = [0,len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp[0])]
+        if bounds is None: bounds = [0,len(self.SiPM.Ch[self.CHANNEL].Amp[0])]
 
         coords = [] #   x,y coordinate arrays organized in one tuple per waveform
         pks_tally = 0 #     keep track of how many peaks are found
 
-        self.log(f'Gettig {len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp)} waveforms for {voltage:.2f}V [{bounds[0]}:{bounds[1]}]',1)
+        self.log(f'Gettig {len(self.SiPM.Ch[self.CHANNEL].Amp)} waveforms for {voltage:.2f}V [{bounds[0]}:{bounds[1]}]',1)
         
-        for waveform in self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp: #loop over the waveforms inside the file
-            filtered = self.SiPMs[float(voltage)].get_filtered_waveform(waveform) # return the filtered waveform
+        for waveform in self.SiPM.Ch[self.CHANNEL].Amp: #loop over the waveforms inside the file
+            filtered = self.SiPM.get_filtered_waveform(waveform) # return the filtered waveform
             x = [] #    must be same lenght as y. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methods).
             y = [] #    must be same length as x. NOTE: array of arrays due to some waveforms having multiple peaks (found with other methos).
             
@@ -448,11 +603,11 @@ class Gat_HPC:  #   Gain Analysis Tool
             
             coords.append((x,y))
         
-        if len(x) != len(y): raise(RuntimeError('Returning list of peak coordinates of different lengths. x: '+str(len(x))+ ' y: '+str(len(y))+' for '+str(len(self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp))+' waveforms'))
+        if len(x) != len(y): raise(RuntimeError('Returning list of peak coordinates of different lengths. x: '+str(len(x))+ ' y: '+str(len(y))+' for '+str(len(self.SiPM.Ch[self.CHANNEL].Amp))+' waveforms'))
 
         self.log(f'{pks_tally} peaks found for {len(self.SiPMs[voltage].Ch[self.CHANNEL].Amp)} waveforms.',0)
 
-        return (self.SiPMs[float(voltage)].Ch[self.CHANNEL].Amp, coords)
+        return (self.SiPM.Ch[self.CHANNEL].Amp, coords)
   
     def peaks_test(self, voltage, maxfev=1000000):
         pass
