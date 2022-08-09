@@ -25,6 +25,7 @@ from datetime import datetime
 import inspect
 from scipy.signal import find_peaks, find_peaks_cwt
 from scipy.optimize import curve_fit
+from scipy.stats import chisquare, gstd
 import requests
 from scipy.special import erfc
 from ipywidgets import IntProgress
@@ -140,6 +141,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
             voltages = np.unique(voltages)
         else:
+            print(f'Looking at {base_regex+filename_regex}')
             self.source_files = glob.glob(base_regex+filename_regex)
             voltages = [x.split('_')[-2] for x in self.source_files]
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
@@ -269,12 +271,12 @@ class Gat_HPC:  #   Gain Analysis Tool
                         self.log(f'Max {max_x}x{max_y}',4)
                         perr = np.sqrt(np.diag(pcov))[1]
 
-                        calc_tau = int(round(popt[2],0))
-                        calc_tau2 = int(round((popt[2]/0.5122501221299463),0))
-                        calc_tau3 = int(round((popt[2]*0.5122501221299463),0))
-                        print(waveform[int(peak_x+calc_tau2)])
-                        print(calc_tau3)
-                        print(f'Value at tau: {waveform[int(peak_x+calc_tau2)]} for tau {calc_tau2} and peak {func[peak_x]}')
+                        calc_tau = round(popt[2],0)
+                        calc_tau_ind = int(calc_tau/((1/self.SiPM.sampling_freq)*1000000))
+                        print(f'Value at tau: {waveform[peak_x+calc_tau_ind]} (func: {func[peak_x+calc_tau_ind]})\nFor tau {calc_tau} (index: {calc_tau_ind})\nand function peak {func[peak_x]} (argmax of model) (-> {np.max(waveform)} argmax wave)\n')
+
+                        try: print(chisquare(func,waveform))
+                        except: print('Cannot get chisquare')
 
                         if perr > 0:
                             lost += 1
@@ -392,12 +394,13 @@ class Gat_HPC:  #   Gain Analysis Tool
                 
 
     def __resolve_wf_fit_params(self):
-        total = len(self.SiPM.Ch[self.CHANNEL].Amp)
+        total = 0
         temp = [0]*len(self.SiPM.Ch[self.CHANNEL].Amp[1])
         double = 0
         late = 0
+        peaks_xs = []
 
-        fig1 = plt.figure()
+        #fig1 = plt.figure()
 
         to_plt = []
 
@@ -405,7 +408,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         #os.mkdir(folder)
 
         for ii, waveform in enumerate(self.SiPM.Ch[self.CHANNEL].Amp):
-            plt.clf()
+            #plt.clf()
             pks = find_peaks(waveform,prominence=150,distance=30)[0]
             if len(pks) > 1:
                 #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform)
@@ -431,45 +434,79 @@ class Gat_HPC:  #   Gain Analysis Tool
                         #plt.title(str([round(self.SiPM.Ch[self.CHANNEL].Time[p],2) for p in pks2]))
                         #plt.savefig(f'{folder}/double2_{ii}.png',dpi=200,facecolor='white')
                         continue
+                    if waveform[pks[0]] > 900: 
+                        late += 1
+                        continue
                     for ii, y in enumerate(waveform): temp[ii] = temp[ii] + y
+                    total += 1
+                    peaks_xs.append(self.SiPM.Ch[self.CHANNEL].Time[pks[0]])
                     to_plt.append(waveform)
-        plt.figure(figsize=(16,5))
-        for tp in to_plt:
-            plt.subplot(1,2,1)
-            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,tp,color='black')
-        #plt.show()
-        #plt.savefig(f'{folder}/cleaned.png',dpi=200,facecolor='white')
-        for wave in self.SiPM.Ch[self.CHANNEL].Amp:
-            plt.subplot(1,2,2)
-            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,wave,color='navy')
-        plt.show()
-        #plt.savefig(f'{folder}/all.png',dpi=200,facecolor='white')
+
         if len(temp) == 0:
-            self.log('Empty array -> cannot estimate tau',3)
-            return
+            self.log(f'No waveforms suitable for τ estimation -> will continue \u001b[0mwithout{ANSI_RESET}{ANSI_RED} fixed parameters!',3)
+            return False
+
         avg = [float(t/total) for t in temp]
         avg = np.asarray(avg)
         peak_x = np.argmax(avg)
         peak_A = avg[peak_x]
         tau_end_val = peak_A*np.e**-1
         tau_ind = np.where(avg[peak_x:] < tau_end_val)[0][0]
-        tau_est = self.SiPM.Ch[self.CHANNEL].Time[tau_ind]
-
-        #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,avg)
-        #plt.xlim(180,tau_ind+20)
-        #plt.show()
-        #plt.plot(np.arange(0,len(avg),1),avg)
-        #plt.xlim(np.arange(0,len(avg),1)[180],np.arange(0,len(avg),1)[tau_ind+20])
-        #plt.show()
-        self.log(f'Found tau {tau_est} us to get from {peak_A} to {tau_end_val}. Using {total} waveforms for {self.voltage:.02f} OV. Tau-ind-est is {tau_ind} waveform indexes',1)
-        self.log(f'Double {double} ({double/total*100}%), late {late} ({late/total*100}%) out of {total} waveforms.',2)
+        tau_est = self.SiPM.Ch[self.CHANNEL].Time[tau_ind]        
         
+        plt.figure(figsize=(18,6))
+        plt.suptitle(f'Filtering waveforms for {self.voltage:.02f} OV', size=16)
+        for wave in self.SiPM.Ch[self.CHANNEL].Amp:
+            plt.subplot(1,2,1)
+            plt.title('Unfiltered')
+            plt.xlabel('[1 = 5 μs]')
+            plt.ylabel('[mV]')
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,wave,color='navy')
+        #plt.savefig(f'{folder}/all.png',dpi=200,facecolor='white')
+        for tp in to_plt:
+            plt.subplot(1,2,2)
+            plt.title('Filtered')
+            plt.xlabel('[1 = 5 μs]')
+            plt.ylabel('[mV]')
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,tp,color='black')
+        #plt.savefig(f'{folder}/cleaned.png',dpi=200,facecolor='white')
+        plt.show()
+
+        self.log(f'ESTIMATED PARAMETERS:\n  - τ: from {peak_A:.04f} mV to {tau_end_val:.04f} -> {tau_est:.04f} μs -> {tau_ind} indexes after the peak.\n {total} out of {len(self.SiPM.Ch[self.CHANNEL].Amp)} waveforms recorded at {self.voltage:.02f} OV were used for this calculation',1)
+        self.log(f'WAVEFORM FILTERING:\n {(double+late)} ({((double+late)/total*100):.03f}%) waveforms were not selected for τ estimation:\n  - {double} waveforms ({(double/total*100):.03f}%) excluded due to unwanted correlated avalanches. (multiple peaks)\n  - {late} waveforms ({(late/total*100):.03f}%) excluded due to timing issues.\n',2)
+
+        plt.figure(figsize=(18,6))
+        plt.suptitle(f'Estimating τ for {self.voltage:.02f} OV', size=16)
+        plt.subplot(1,2,1)
+        plt.plot(self.SiPM.Ch[self.CHANNEL].Time,avg,label='Averaged')
+        plt.vlines(self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x],0,peak_A,linestyles='dashed',colors=['red'],label='τ')
+        plt.legend(loc=1)
+        plt.subplot(1,2,2)
+        plt.plot(self.SiPM.Ch[self.CHANNEL].Time,avg,label='Averaged')
+        plt.vlines(self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x],0,peak_A,linestyles='dashed',colors=['red'],label='τ')
+        plt.xlim(180,peak_x+tau_ind+50)
+        plt.title('Zoomed in')
+        plt.show()
+
         self.tau_est_final = tau_est
+
+        self.__peak_dispersion(peaks_xs)
+
         return tau_est  
+
+    def __peak_dispersion(self, pks):
+        self.log(f'Peak distribution shows a standard deviation of {gstd(pks)} μs',2)
+        plt.figure(figsize=(10,8))
+        plt.suptitle(f'Estimating timing σ for peaks at {self.voltage:.02f} OV', size=16)
+        plt.hist(pks,bins=np.arange(190,230,1),histtype='bar')
+        plt.show()
+
+        #sys.exit(0)
 
     def __save_coords(self, fit_params):
         if not os.path.exists('./waveform_fits_data'): os.mkdir('waveform_fits_data')
         filename = f'./waveform_fits_data/_backup_{self.voltage:.01f}'
+        #20.8 MB vs 216 KB
 
         x_axes = []
         popts = []
@@ -656,15 +693,12 @@ class Gat_HPC:  #   Gain Analysis Tool
         tracemalloc.stop()
         return gain
 
-    def eval_gain(self, voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False,total_bins=None):
+    def eval_gain(self, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False,total_bins=None):
         if self.error: self.__throw_error()
-        if not float(voltage) in self.voltages:
-            self.log('Voltage not available, asked for: '+str(voltage),3) #TODO IMPLEMENT A METHOD THAT CHECKS AND HANDLES VOLTAGES AND CONVERTS THEM
-            return False
 
-        if self.data_type == self.RAW: return self.__raw_eval_gain(voltage,waveform_fit,find_best,bin_width,distance,prominence,min,plot,fix_params,reload)
+        if self.data_type == self.RAW: return self.__raw_eval_gain(self.voltage,waveform_fit,find_best,bin_width,distance,prominence,min,plot,fix_params,reload)
 
-        if self.data_type == self.MCA: return self.__mca_eval_gain(voltage,total_bins,min)
+        if self.data_type == self.MCA: return self.__mca_eval_gain(self.voltage,total_bins,min)
 
     def __gain_from_peaks(self, popt_list,perr_list):
         data = np.asarray([float(peak[1]) for peak in popt_list])
@@ -977,11 +1011,125 @@ class Gat_HPC:  #   Gain Analysis Tool
         # hx_rebin=range(len(h_rebin))
         return np.array(hx_rebin), np.array(h_rebin)
 
+    def __mca_fit_peaks(self,min_peaks,total_bins, file):
+        print(f'MCA data from {file}')
+
+        gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
+        gain_err=[] #empty list to fill in the values of gain fit error, returned at the end of this function
+        calib_pe=[]#empty list to fill in the values for calibrated PE 
+        calib_count=[]
+
+        x, y = self.waveforms[file]
+        x,y = self.rebin(x,y, total_bins)
+
+        gain_temp=[]#reset the gain temp list here to store gain values for one file
+        #Use scipy find_peaks to find peaks starting with a very high prominence 
+        PROMINENCE=1E3 #This prominence is re-set here to ensure that every file starts out with a high prominence
+    
+        peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=80/total_bins)
+        peak_length=len(peaks)
+        #We want to ensure that using a high prominence gives us at least N_peaks peaks to fit a straight line to. If it doesn't we reduce prominence till we get at least 3 peaks. N_peaks is set above
+        while (peak_length < min_peaks+1):
+            PROMINENCE=PROMINENCE-1
+            
+            peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=80/total_bins)
+            peak_length=len(peaks)
+            
+        #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
+        first_pe_max=x[peaks[0]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
+        max_value=y[peaks[0]] # The height of the 3rd peak
+        x_idx_array=(y<0.5*max_value) & (x>first_pe_max)# returns a boolean array where both conditions are true
+        right_side_x= x[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+        sigma_guess=np.abs(first_pe_max-right_side_x) #We need this to fit the width of the Gaussian peaks
+
+    
+        plt.figure(figsize=(12,2)) # Call the figure here
+        plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
+        plt.xlim(0,1000/total_bins)
+        # plt.ylim(0,50)
+        plt.yscale('log')
+        plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
+        plt.plot(x,y,lw=1) #plot the signal
+        cut= (x < first_pe_max+sigma_guess) & (x > first_pe_max-sigma_guess) # This cut helps to fix the width of the peak-fit
+        popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[max_value,first_pe_max,sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+
+        plt.plot(x[cut],self.gauss(x[cut],*popt),color='green',label='Fit',lw=2,alpha=0.5) # Here we plot the fit on the 2nd peak to see if everything looks ok.
+    
+        
+        for i,peak in enumerate(peaks[2:]): #here we ignore the first peak because it could be the pedestal
+            new_first_pe_max=x[peak] #x-value of the peak
+            new_max_value=y[peak] #height of the peak
+            new_x_idx_array=(y<0.5*new_max_value) & (x>new_first_pe_max) # returns a boolean array where both conditions are true
+            new_right_side_x= x[np.where(new_x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+            new_sigma_guess=np.abs(new_first_pe_max-new_right_side_x) #We need this to fit the width of the Gaussian peaks
+
+
+            new_cut= (x < new_first_pe_max+new_sigma_guess) & (x > new_first_pe_max-new_sigma_guess) # This cut helps to fix the width of the peak-fit
+            popt_new,pcov_new=curve_fit(self.gauss,x[new_cut],y[new_cut],p0=[new_max_value,new_first_pe_max,new_sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+            plt.plot(x[new_cut],self.gauss(x[new_cut],*popt_new),color='r',label='Fit',lw=3) # Here we plot the fit on all the peaks
+            gain_temp.append(popt_new[1]) #Here we append the value of the peak fit mean 
+                
+        #print(f'Returning {gain_temp}')
+        weird = y[peaks[2]]/total_bins<90
+        return (gain_temp,x,y, weird, peaks)
+
+    def __mca_gain(self,vals, weird, total_bins, peaks): #TODO understand why Y and total_bins are important here
+
+        plt.subplot(1,3,2) #This subplot shows the straight line fit to the peak means to obtain the slope/gain
+        if weird: #TODO hande that sometimes this gives error!!!!
+            popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(3,len(peaks)+1),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
+            plt.plot(np.arange(3,len(peaks)+1),self.line_mca(np.arange(3,len(peaks)+1),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+
+            plt.scatter(np.arange(3,len(peaks)+1),vals,color='r') #plot the values of the peak means
+            plt.legend(loc=2)
+        else:
+            other = np.arange(2,len(peaks)+1)
+            popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(2,len(peaks)),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
+            print()
+            plt.plot(np.arange(2,len(peaks)),self.line_mca(np.arange(2,len(peaks)),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+            plt.scatter(np.arange(2,len(peaks)),vals,color='r') #plot the values of the peak means
+            plt.legend(loc=2)
+        
+        gain = popt_temp[0] #append the gain values to obtain BV later
+        gain_err = np.sqrt(np.diag(pcov_temp))[0] #append the straight line error fit
+
+        #print(f'Returning {gain} and {gain_err}')
+        return (gain,gain_err, popt_temp)
+
+    def __calibrate_gain(self, popt_temp, x, y): #TODO understand why x is important and what popt[0]+[1] is
+
+        calib_pe = x/popt_temp[0]+popt_temp[1]
+        calib_count = y
+
+        plt.subplot(1,3,3)#This subplot shows the calibrated PE spectra
+        plt.plot(x/popt_temp[0]+popt_temp[1],y)
+        plt.yscale('log')
+        plt.xlim(0,5)
+        plt.xticks(np.arange(0,5))
+        plt.grid()
+        #plt.suptitle(file, y=1.12)
+        plt.show() #show the plot
+
+        return (calib_pe, calib_count)
+
     def __mca_eval_gain(self,voltage,total_bins,min_peaks):
         if total_bins is None: raise(ArgumentError('Specify a number as the total number of bins flag for gat.eval_gain method!'))
 
         print(f'MCA data -> peaks: {min_peaks}, bins: {total_bins}')
+        
+        calib_pe, calib_count_arr, gains, perrs = [], [], [], []
 
+        for file in self.source_files:
+            vals, x, y,weird, peaks = self.__mca_fit_peaks(min_peaks,total_bins,file)
+            gain, perr, gain_popt = self.__mca_gain(vals,weird, total_bins,peaks)
+            calib_peak, calib_count = self.__calibrate_gain(gain_popt,x,y)
+
+            calib_pe.append(calib_peak)
+            calib_count_arr.append(calib_count)
+            gains.append(gain)
+            perrs.append(perr)
+
+        return calib_pe, calib_count_arr, gains, perrs
         gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
         gain_err=[] #empty list to fill in the values of gain fit error, returned at the end of this function
         calib_pe=[]#empty list to fill in the values for calibrated PE 
@@ -1092,8 +1240,6 @@ class Gat_HPC:  #   Gain Analysis Tool
                     
                 peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=5)
                 peak_length=len(peaks)
-
-
                 
             plt.plot(x[peaks],y[peaks],'*',ms=5) # plot the peak markers
             first_pe_max=x[peaks[2]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
@@ -1147,6 +1293,24 @@ class Gat_HPC:  #   Gain Analysis Tool
 
             plt.tight_layout()
             plt.show()
+
+            #self.other()
+
+    def other(self,data):
+        NO_FIELD_calib_pe,NO_FIELD_calib_count,NO_FIELD_gain_list,NO_FIELD_gain_err = data
+        plt.figure(figsize=(6,4))
+
+        time_NO_FIELD=np.arange(0,len(NO_FIELD_calib_pe))
+        plt.errorbar(time_NO_FIELD,NO_FIELD_gain_list*9,yerr=NO_FIELD_gain_err,fmt='o',ms=7,label='Uncalibrated Gain')
+        plt.errorbar(time_NO_FIELD,NO_FIELD_pe_corrected_gain,yerr=NO_FIELD_pe_corrected_gain_err,fmt='o',ms=7,label='PE Calibrated Gain')
+
+        plt.ylabel('[ADC or PE]/PE')
+        plt.xlabel('Time [minutes]')
+        plt.title('NO_FIELD')
+        plt.grid()
+        plt.legend(loc='best')
+        #plt.savefig('NO_FIELD_gain_comparison.pdf')
+        plt.show()
 
     def gain_calculator(self,PATH,N_BINS,N_PEAKS):
         BINS=N_BINS #Number of bins to rebin the MCA data with
