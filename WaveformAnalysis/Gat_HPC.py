@@ -392,7 +392,6 @@ class Gat_HPC:  #   Gain Analysis Tool
                 else: return (True,True)
         return (True,True)       
                 
-
     def __resolve_wf_fit_params(self):
         total = 0
         temp = [0]*len(self.SiPM.Ch[self.CHANNEL].Amp[1])
@@ -693,12 +692,15 @@ class Gat_HPC:  #   Gain Analysis Tool
         tracemalloc.stop()
         return gain
 
-    def eval_gain(self, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False,total_bins=None):
+    def eval_gain(self, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False,total_bins=None,min_bin=None, max_bin=None, min_prominence=None, max_prominence=None, min_distance=None, max_distance=None):
         if self.error: self.__throw_error()
 
         if self.data_type == self.RAW: return self.__raw_eval_gain(self.voltage,waveform_fit,find_best,bin_width,distance,prominence,min,plot,fix_params,reload)
 
-        if self.data_type == self.MCA: return self.__mca_eval_gain(self.voltage,total_bins,min)
+        if self.data_type == self.MCA:
+            if find_best:
+                return self.__mca_eval_gain(total_bins,min,best=True, min_bin=min_bin,max_bin=max_bin,min_distance=min_distance,max_distance=max_distance,min_prominence=min_prominence,max_prominence=max_prominence)
+            return self.__mca_eval_gain(total_bins,min)
 
     def __gain_from_peaks(self, popt_list,perr_list):
         data = np.asarray([float(peak[1]) for peak in popt_list])
@@ -808,7 +810,10 @@ class Gat_HPC:  #   Gain Analysis Tool
                 print(f'Estimated time to completion: {float(np.mean(diffs)*(len(perms)-f.value)/60):.01f} minutes',end='\r')
                 if len(diffs) == 5: self.notify('Initated gain calc.',f'ETC: {float(np.mean(diffs)*(len(perms)-f.value)/60):.01f} minutes',1) """
 
-            if not best is None: self.log(f'Best found at prominence {best[1]}, distance {best[2]}, bin width {best[0]} for {len(trials)} trials',1)
+
+            if not best is None: 
+                self.log(f'Best found at prominence {best[1]}, distance {best[2]}, bin width {best[0]} for {len(trials)} trials',1)
+
             else:
                 self.log('Fatal error: could not load any peaks!',3)
                 return (False,False)
@@ -834,6 +839,116 @@ class Gat_HPC:  #   Gain Analysis Tool
             done += 1
             self.log(f'Skipped {skipped} of {done+skipped}',4) """            
 
+    def __find_best_MCA(self, file, min_peaks, min_bin, max_bin, min_prominence, max_prominence, min_distance, max_distance):
+        fits, errs = [], []
+        x, y = self.waveforms[file]
+
+        bin_start = min_bin
+        bin_stop = max_bin
+        bin_step = 1 #  DO NOT SET THIS TO FLOAT VALUES --> REBIN ONLY TAKES INTS AND CONVERTS TO INT ANYWAY!!!!!!
+
+        prominence_start = min_prominence
+        prominence_stop = max_prominence
+        prominence_step = 5
+
+        distance_start = min_distance
+        distance_stop = max_distance
+        distance_step = 5
+
+        min_peaks = min_peaks
+        max_error = 10.0
+        
+        #trials = {}
+        last = None
+        
+        best = None
+        temp_errs = []
+
+        skipped = 0
+        done = 0
+
+        perms = [item for item in itertools.product(np.arange(bin_start, bin_stop,bin_step),np.arange(prominence_start, prominence_stop,prominence_step),np.arange(distance_start, distance_stop,distance_step))]
+        self.log(f'Best fit for {file} using {len(perms)} permutations.', 4)
+        f = IntProgress(value=0,min=0,max=len(perms),step=1,description='Loading MCA perms...',bar_style='info',layout={"width": "100%"})
+        display(f)
+        self.log('Multiprocessing does not support progress bars. Disregard it.',2)
+        args = []
+
+
+        with Manager() as manager:
+            trials = manager.dict()
+            start = datetime.now()
+
+            for perm in perms:
+                args.append([perm, x,y,min_peaks, max_error, trials])
+
+            self.log('Started multiprocessing.',4)
+            pool = Pool()
+            pool.starmap(self.perm_run_MCA, args)
+            pool.close()
+            #self.perm_run_MCA((13,80,3),x,y,min_peaks,max_error,trials)
+
+            self.log('Best fit analysis for MCA data completed. Now running on single thread',4)
+
+            for perm in trials.keys():
+                peaks, perr_list = trials[perm]     # Go through all the permutations with less than max_err error
+                last = perm
+                num_peaks = len(peaks)
+                combined = float(np.sum(perr_list))/num_peaks   # Get best combination of num_peaks and min error
+
+                if not True in np.asarray(perr_list) > max_error:       # Discard if any peak has error > max error
+                    if num_peaks >= min_peaks: temp_errs.append(combined)       # Discard if num peaks < min peaks
+                    else: self.log('Not counting for not enough peaks',4)
+                else: self.log('Not counting for too big err'+str(perr_list),4)
+                if True in np.asarray(temp_errs) < combined: continue           # It is not the best one in the array of combined values
+                else:                                                           # Best one yet (combined value)
+                    #self.log(np.asarray(temp_errs) < combined,4)
+                    #self.log(temp_errs,4)
+                    #self.log(f'Combined/peaks: {combined}',4)
+                    best = perm
+                done += 1
+                #self.log(f'Skipped {skipped} of {done+skipped}',4)
+
+            end = datetime.now()
+            self.log(f'Runtime: {float(np.mean((end-start).total_seconds())):.01f} seconds',1)
+
+            if not best is None: 
+                self.log(f'Best found at prominence {best[1]}, distance {best[2]}, bins {best[0]} for {len(trials)} trials',1)
+
+            else:
+                self.log('Fatal error: could not load any peaks!',3)
+                return None
+
+            #self.__mca_fit_peaks2(min_peaks,best[0],x,y,prominence=best[1],distance=best[2],plot=True)
+            return best
+
+    def perm_run_MCA(self, perm, x,y, min_peaks, max_error, trials):
+
+        #x,y = self.rebin(x,y, perm[0]) #1 (prom) 2(dist)
+        try:
+            err_list, peaks = self.__mca_fit_peaks2(min_peaks,perm[0],x,y,perm[1],perm[2],plot=False)
+            #print(np.asarray(err_list))
+            if peaks is False: return False
+            elif True in (np.asarray(err_list) > max_error):
+                return False
+        except Exception as e:
+            return False
+        else:
+            distances = []
+            sorted_peaks = np.sort(peaks)
+            for i in np.arange(4,len(sorted_peaks),1):
+                prev = np.abs(sorted_peaks[i-1]-sorted_peaks[i-2])
+                curr = np.abs(sorted_peaks[i]-sorted_peaks[i-1])
+                if prev > curr*1.5 or curr > prev*1.5 or curr > 12:
+                    if i > 6:
+                        #print(f'Letting {sorted_peaks} pass because {i}>6')
+                        trials[perm] = (peaks, err_list)
+                        return
+                    else: return False
+                distances.append(np.abs(sorted_peaks[i]-sorted_peaks[i-1]))
+            trials[perm] = (peaks, err_list)
+
+
     def __peak_filter(self, peaks_coords): #TODO CHECK THAT PEAK IS EXTRACTED FROM FUNCTIONA AND NOT ARG_MAX!!!
         temp = []
         avg = 0
@@ -845,6 +960,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             temp.append((x[max_index],y[max_index]))
         self.log(f'Average peak mu is {avg/len(peaks_coords)} for {avg} and {len(peaks_coords)}',2)
         return temp
+
 
     def __get_peaks(self, peaks_filtered, bin_width, prominence, distance, peaks_min,max_bins=1000,plot=False,is_best=False):
 
@@ -992,6 +1108,7 @@ class Gat_HPC:  #   Gain Analysis Tool
     def line_mca(self,x,a,b): return a*(x-b)
 
     def rebin(self,hx,h,bins):
+        bins = int(bins)
         h_rebin=[]
         for i in range(int(len(h)/bins)):
             start_idx=i*bins
@@ -1011,7 +1128,62 @@ class Gat_HPC:  #   Gain Analysis Tool
         # hx_rebin=range(len(h_rebin))
         return np.array(hx_rebin), np.array(h_rebin)
 
-    def __mca_fit_peaks(self,min_peaks,total_bins, file):
+    def __mca_fit_peaks2(self,min_peaks,total_bins, x,y, prominence=None, distance=None, plot=True):
+
+        x,y = self.rebin(x,y, total_bins)
+        gain_temp=[]#reset the gain temp list here to store gain values for one file
+        err_temp = []
+
+        PROMINENCE = 1E3
+        DISTANCE = 80/total_bins
+        if not prominence is None: PROMINENCE= prominence 
+        if not distance is None: DISTANCE=distance
+
+        peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=DISTANCE)
+        if len(peaks) < min_peaks: return False,False
+            
+        #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
+        first_pe_max=x[peaks[0]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
+        max_value=y[peaks[0]] # The height of the 3rd peak
+        x_idx_array=(y<0.5*max_value) & (x>first_pe_max)# returns a boolean array where both conditions are true
+        right_side_x= x[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+        sigma_guess=np.abs(first_pe_max-right_side_x) #We need this to fit the width of the Gaussian peaks
+
+        cut= (x < first_pe_max+sigma_guess) & (x > first_pe_max-sigma_guess) # This cut helps to fix the width of the peak-fit
+        popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[max_value,first_pe_max,sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+        #err_temp.append(np.sqrt(np.diag(pcov))[1])
+
+        if plot:
+            plt.figure(figsize=(12,2)) # Call the figure here
+            plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
+            plt.xlim(0,1000/total_bins)
+            plt.suptitle(f'P: {PROMINENCE}, D: {DISTANCE}, MIN: {min_peaks}, BINS: {total_bins}')
+            # plt.ylim(0,50)
+            plt.yscale('log')
+            plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
+            plt.plot(x,y,lw=1) #plot the signal
+            plt.plot(x[cut],self.gauss(x[cut],*popt),color='green',label='Fit',lw=2,alpha=0.5) # Here we plot the fit on the 2nd peak to see if everything looks ok.
+    
+        for i,peak in enumerate(peaks[2:]): #here we ignore the first peak because it could be the pedestal
+            new_first_pe_max=x[peak] #x-value of the peak
+            new_max_value=y[peak] #height of the peak
+            new_x_idx_array=(y<0.5*new_max_value) & (x>new_first_pe_max) # returns a boolean array where both conditions are true
+            new_right_side_x= x[np.where(new_x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+            new_sigma_guess=np.abs(new_first_pe_max-new_right_side_x) #We need this to fit the width of the Gaussian peaks
+
+
+            new_cut= (x < new_first_pe_max+new_sigma_guess) & (x > new_first_pe_max-new_sigma_guess) # This cut helps to fix the width of the peak-fit
+            popt_new,pcov_new=curve_fit(self.gauss,x[new_cut],y[new_cut],p0=[new_max_value,new_first_pe_max,new_sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+            if plot: plt.plot(x[new_cut],self.gauss(x[new_cut],*popt_new),color='r',label='Fit',lw=3) # Here we plot the fit on all the peaks
+            gain_temp.append(popt_new[1]) #Here we append the value of the peak fit mean
+            err_temp.append(np.sqrt(np.diag(pcov_new))[1])
+
+        if plot: plt.show()
+        #print(f'Returning {gain_temp}')
+        weird = y[peaks[2]]/total_bins<90
+        return (err_temp, peaks)
+
+    def __mca_fit_peaks(self,min_peaks,total_bins, file, prominence=None, distance=None):
         print(f'MCA data from {file}')
 
         gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
@@ -1024,15 +1196,18 @@ class Gat_HPC:  #   Gain Analysis Tool
 
         gain_temp=[]#reset the gain temp list here to store gain values for one file
         #Use scipy find_peaks to find peaks starting with a very high prominence 
-        PROMINENCE=1E3 #This prominence is re-set here to ensure that every file starts out with a high prominence
-    
-        peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=80/total_bins)
+        PROMINENCE = 1E3
+        DISTANCE = 80/total_bins
+        if not prominence is None: PROMINENCE = prominence 
+        if not distance is None: DISTANCE =distance
+
+        peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=DISTANCE)
         peak_length=len(peaks)
         #We want to ensure that using a high prominence gives us at least N_peaks peaks to fit a straight line to. If it doesn't we reduce prominence till we get at least 3 peaks. N_peaks is set above
-        while (peak_length < min_peaks+1):
+        while (peak_length < min_peaks+1) and prominence is None:
             PROMINENCE=PROMINENCE-1
             
-            peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=80/total_bins)
+            peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=DISTANCE)
             peak_length=len(peaks)
             
         #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
@@ -1073,8 +1248,9 @@ class Gat_HPC:  #   Gain Analysis Tool
         weird = y[peaks[2]]/total_bins<90
         return (gain_temp,x,y, weird, peaks)
 
-    def __mca_gain(self,vals, weird, total_bins, peaks): #TODO understand why Y and total_bins are important here
+    def __mca_gain(self,vals, weird, total_bins, peaks, multiplication=None): #TODO understand why Y and total_bins are important here
 
+        if not multiplication is None: vals = np.asarray(vals)*multiplication
         plt.subplot(1,3,2) #This subplot shows the straight line fit to the peak means to obtain the slope/gain
         if weird: #TODO hande that sometimes this gives error!!!!
             popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(3,len(peaks)+1),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
@@ -1112,7 +1288,7 @@ class Gat_HPC:  #   Gain Analysis Tool
 
         return (calib_pe, calib_count)
 
-    def __mca_eval_gain(self,voltage,total_bins,min_peaks):
+    def __mca_eval_gain(self,total_bins,min_peaks, best=False, min_bin=None, max_bin=None, min_prominence=None, max_prominence=None, min_distance=None, max_distance=None):
         if total_bins is None: raise(ArgumentError('Specify a number as the total number of bins flag for gat.eval_gain method!'))
 
         print(f'MCA data -> peaks: {min_peaks}, bins: {total_bins}')
@@ -1120,14 +1296,46 @@ class Gat_HPC:  #   Gain Analysis Tool
         calib_pe, calib_count_arr, gains, perrs = [], [], [], []
 
         for file in self.source_files:
-            vals, x, y,weird, peaks = self.__mca_fit_peaks(min_peaks,total_bins,file)
-            gain, perr, gain_popt = self.__mca_gain(vals,weird, total_bins,peaks)
-            calib_peak, calib_count = self.__calibrate_gain(gain_popt,x,y)
+            if best:
+                best_fit = self.__find_best_MCA(file,min_peaks,min_bin,max_bin,min_prominence,max_prominence,min_distance,max_distance)
+                if best_fit is None:
+                    self.log(f'Skipping {file} --> COULD NOT LOAD ANY PEAKS!',3)
+                    continue
 
-            calib_pe.append(calib_peak)
-            calib_count_arr.append(calib_count)
-            gains.append(gain)
-            perrs.append(perr)
+                bins, prominence, distance = best_fit
+
+                vals, x, y,weird, peaks = self.__mca_fit_peaks(min_peaks,bins,file,prominence=prominence,distance=distance)
+                distances = []
+                sorted_peaks = np.sort(peaks)
+                for i in np.arange(4,len(sorted_peaks),1):
+                    prev = np.abs(sorted_peaks[i-1]-sorted_peaks[i-2])
+                    curr = np.abs(sorted_peaks[i]-sorted_peaks[i-1])
+                    if prev > curr*1.2 or curr > prev*1.2 or curr > 12:
+                        if i > 6:
+                            print('Trimming from')
+                            print(distances)
+                            print(sorted_peaks)
+                            peaks = sorted_peaks[:i]
+                            vals = np.sort(vals)[:i]
+                            print('to:')
+                            print(vals)
+                        else: continue
+                gain, perr, gain_popt = self.__mca_gain(vals,weird, bins,peaks, multiplication=bins)
+                calib_peak, calib_count = self.__calibrate_gain(gain_popt,x,y)
+
+                calib_pe.append(calib_peak)
+                calib_count_arr.append(calib_count)
+                gains.append(gain)
+                perrs.append(perr)
+            else:
+                vals, x, y,weird, peaks = self.__mca_fit_peaks(min_peaks,total_bins,file)
+                gain, perr, gain_popt = self.__mca_gain(vals,weird, total_bins,peaks)
+                calib_peak, calib_count = self.__calibrate_gain(gain_popt,x,y)
+
+                calib_pe.append(calib_peak)
+                calib_count_arr.append(calib_count)
+                gains.append(gain)
+                perrs.append(perr)
 
         return calib_pe, calib_count_arr, gains, perrs
         gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
