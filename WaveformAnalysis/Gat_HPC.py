@@ -842,6 +842,8 @@ class Gat_HPC:  #   Gain Analysis Tool
     def __find_best_MCA(self, file, min_peaks, min_bin, max_bin, min_prominence, max_prominence, min_distance, max_distance):
         fits, errs = [], []
         x, y = self.waveforms[file]
+        x = x[250:]
+        y = y[250:]
 
         bin_start = min_bin
         bin_stop = max_bin
@@ -853,10 +855,10 @@ class Gat_HPC:  #   Gain Analysis Tool
 
         distance_start = min_distance
         distance_stop = max_distance
-        distance_step = 5
+        distance_step = 3
 
         min_peaks = min_peaks
-        max_error = 10.0
+        max_error = 5.0
         
         #trials = {}
         last = None
@@ -1156,7 +1158,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         if plot:
             plt.figure(figsize=(12,2)) # Call the figure here
             plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
-            plt.xlim(0,1000/total_bins)
+            #plt.xlim(0,1000/total_bins)
             plt.suptitle(f'P: {PROMINENCE}, D: {DISTANCE}, MIN: {min_peaks}, BINS: {total_bins}')
             # plt.ylim(0,50)
             plt.yscale('log')
@@ -1220,7 +1222,7 @@ class Gat_HPC:  #   Gain Analysis Tool
     
         plt.figure(figsize=(12,2)) # Call the figure here
         plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
-        plt.xlim(0,1000/total_bins)
+        #plt.xlim(0,1000/total_bins)
         # plt.ylim(0,50)
         plt.yscale('log')
         plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
