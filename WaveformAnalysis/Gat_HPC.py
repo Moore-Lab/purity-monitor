@@ -139,13 +139,13 @@ class Gat_HPC:  #   Gain Analysis Tool
         voltages = []
         if self.data_type == self.RAW:
             self.source_files = glob.glob(base_regex+filename_regex)
-            voltages = [x.split('_')[-2] for x in self.source_files]
+            voltages = [x.split('_')[3] for x in self.source_files]
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
             voltages = np.unique(voltages)
         else:
             print(f'Looking at {base_regex+filename_regex}')
             self.source_files = glob.glob(base_regex+filename_regex)
-            voltages = [x.split('_')[-2] for x in self.source_files]
+            voltages = [x.split('_')[3] for x in self.source_files]
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
             voltages = np.unique(voltages)
 
@@ -186,7 +186,8 @@ class Gat_HPC:  #   Gain Analysis Tool
     def __load_files_MCA(self,base_regex,filename_regex,voltage):
         if self.error: self.__throw_error()
         
-        reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
+        #reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
+        reg = base_regex + filename_regex
         files = natsorted(glob.glob(reg))
         self.source_files = files
         for file in files:
@@ -934,6 +935,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         if len(peaks) == 0: return False
         if len(peaks) >= min_peaks:
             perrs, pks = self.gauss_peaks_MCA(peaks,pdict,x,y,max_error,plot=False)
+            if perrs is False: return False
             if not True in (np.asarray(perrs) > max_error) and len(pks) >= min_peaks:
                trials[perm] = (pks,perrs)
                return pks
@@ -951,14 +953,14 @@ class Gat_HPC:  #   Gain Analysis Tool
         sigma_guess=np.abs(fit_peak_x-right_side_x) #We need this to fit the width of the Gaussian peaks
 
         cut= (x < fit_peak_x+sigma_guess) & (x > fit_peak_x-sigma_guess)
-        popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[fit_peak_amp,fit_peak_x,sigma_guess],maxfev=100000)
+        try: popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[fit_peak_amp,fit_peak_x,sigma_guess],maxfev=1000000)
+        except: return False, False
+        
         #err_temp.append(np.sqrt(np.diag(pcov))[1])
 
         if plot:
             plt.figure(figsize=(12,2)) # Call the figure here
             plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
-            plt.xlim(0,total_bins*3)
-            plt.suptitle(f'P: {PROMINENCE}, D: {DISTANCE}, MIN: {min_peaks}, BINS: {total_bins}')
             # plt.ylim(0,50)
             plt.yscale('log')
             plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
