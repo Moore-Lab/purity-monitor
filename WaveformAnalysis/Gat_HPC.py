@@ -13,6 +13,7 @@ import sys, glob,importlib, latex, itertools, os
 sys.path.insert(0,'../../')
 sys.path.insert(0,'/Library/TeX/texbin/')
 sys.path.insert(0,'../../WaveformAnalysis')
+sys.path.insert(0,'/home/tb829/project/purity-monitor/')
 import numpy as np
 import Dataset as Dataset
 import Waveform as Waveform
@@ -32,6 +33,7 @@ from ipywidgets import IntProgress
 from IPython.display import display
 import scipy.special
 from multiprocessing import Process, Manager, Pool
+import multiprocessing
 import tracemalloc
 import h5py
 
@@ -63,8 +65,8 @@ warnings.filterwarnings("ignore")
 pp = pprint.PrettyPrinter(indent=4)
 
 # MATPLOTLIB SETTINGS
-plt.style.use('../../style.mplstyle')
-colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+#plt.style.use('../../style.mplstyle')
+#colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 mpl.rcParams['figure.dpi']= 200
 
 class Gat_HPC:  #   Gain Analysis Tool
@@ -848,6 +850,14 @@ class Gat_HPC:  #   Gain Analysis Tool
         bin_start = min_bin
         bin_stop = max_bin
         bin_step = 1 #  DO NOT SET THIS TO FLOAT VALUES --> REBIN ONLY TAKES INTS AND CONVERTS TO INT ANYWAY!!!!!!
+        bins = np.arange(bin_start,bin_stop, bin_step)
+
+        for bin in bins:
+            x1,y1 = self.rebin(x,y,bin)
+            plt.plot(x1,y1)
+            plt.title(str(bin))
+            plt.xlim(0,5*bin)
+            plt.show()
 
         prominence_start = min_prominence
         prominence_stop = max_prominence
@@ -855,7 +865,7 @@ class Gat_HPC:  #   Gain Analysis Tool
 
         distance_start = min_distance
         distance_stop = max_distance
-        distance_step = 3
+        distance_step = 2
 
         min_peaks = min_peaks
         max_error = 5.0
@@ -884,7 +894,7 @@ class Gat_HPC:  #   Gain Analysis Tool
             for perm in perms:
                 args.append([perm, x,y,min_peaks, max_error, trials])
 
-            self.log('Started multiprocessing.',4)
+            self.log(f'Started multiprocessing on {multiprocessing.cpu_count()} CPUs',4)
             pool = Pool()
             pool.starmap(self.perm_run_MCA, args)
             pool.close()
@@ -1158,7 +1168,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         if plot:
             plt.figure(figsize=(12,2)) # Call the figure here
             plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
-            #plt.xlim(0,1000/total_bins)
+            plt.xlim(0,total_bins*3)
             plt.suptitle(f'P: {PROMINENCE}, D: {DISTANCE}, MIN: {min_peaks}, BINS: {total_bins}')
             # plt.ylim(0,50)
             plt.yscale('log')
@@ -1194,6 +1204,8 @@ class Gat_HPC:  #   Gain Analysis Tool
         calib_count=[]
 
         x, y = self.waveforms[file]
+        x = x[250:]
+        y = y[250:]
         x,y = self.rebin(x,y, total_bins)
 
         gain_temp=[]#reset the gain temp list here to store gain values for one file
@@ -1204,13 +1216,13 @@ class Gat_HPC:  #   Gain Analysis Tool
         if not distance is None: DISTANCE =distance
 
         peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=DISTANCE)
-        peak_length=len(peaks)
+        """peak_length=len(peaks)
         #We want to ensure that using a high prominence gives us at least N_peaks peaks to fit a straight line to. If it doesn't we reduce prominence till we get at least 3 peaks. N_peaks is set above
         while (peak_length < min_peaks+1) and prominence is None:
             PROMINENCE=PROMINENCE-1
             
             peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=DISTANCE)
-            peak_length=len(peaks)
+            peak_length=len(peaks)"""
             
         #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
         first_pe_max=x[peaks[0]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
@@ -1223,6 +1235,7 @@ class Gat_HPC:  #   Gain Analysis Tool
         plt.figure(figsize=(12,2)) # Call the figure here
         plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
         #plt.xlim(0,1000/total_bins)
+        plt.xlim(0,total_bins*3)
         # plt.ylim(0,50)
         plt.yscale('log')
         plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
@@ -1255,17 +1268,17 @@ class Gat_HPC:  #   Gain Analysis Tool
         if not multiplication is None: vals = np.asarray(vals)*multiplication
         plt.subplot(1,3,2) #This subplot shows the straight line fit to the peak means to obtain the slope/gain
         if weird: #TODO hande that sometimes this gives error!!!!
-            popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(3,len(peaks)+1),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
-            plt.plot(np.arange(3,len(peaks)+1),self.line_mca(np.arange(3,len(peaks)+1),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+            popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(1,len(vals)+1),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
+            plt.plot(np.arange(1,len(vals)+1),self.line_mca(np.arange(1,len(vals)+1),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
 
-            plt.scatter(np.arange(3,len(peaks)+1),vals,color='r') #plot the values of the peak means
+            plt.scatter(np.arange(1,len(vals)+1),vals,color='r') #plot the values of the peak means
             plt.legend(loc=2)
         else:
-            other = np.arange(2,len(peaks)+1)
-            popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(2,len(peaks)),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
+            other = np.arange(2,len(vals)+1)
+            popt_temp,pcov_temp=curve_fit(self.line_mca,np.arange(2,len(vals)),vals,p0=[10,0],maxfev=10000) #Use the straight line fit here
             print()
-            plt.plot(np.arange(2,len(peaks)),self.line_mca(np.arange(2,len(peaks)),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
-            plt.scatter(np.arange(2,len(peaks)),vals,color='r') #plot the values of the peak means
+            plt.plot(np.arange(2,len(peaks)),self.line_mca(np.arange(2,len(vals)),*popt_temp),color='k',label=(str(np.round(popt_temp[0],2)))+'$\pm$'+str(np.round(np.sqrt(np.diag(pcov_temp))[0],2))+' ADC/PE') # plot the straight line fit
+            plt.scatter(np.arange(2,len(vals)),vals,color='r') #plot the values of the peak means
             plt.legend(loc=2)
         
         gain = popt_temp[0] #append the gain values to obtain BV later
@@ -1312,15 +1325,11 @@ class Gat_HPC:  #   Gain Analysis Tool
                 for i in np.arange(4,len(sorted_peaks),1):
                     prev = np.abs(sorted_peaks[i-1]-sorted_peaks[i-2])
                     curr = np.abs(sorted_peaks[i]-sorted_peaks[i-1])
-                    if prev > curr*1.2 or curr > prev*1.2 or curr > 12:
+                    if prev > curr*1.4 or curr > prev*1.4 or curr > 14:
                         if i > 6:
-                            print('Trimming from')
-                            print(distances)
-                            print(sorted_peaks)
-                            peaks = sorted_peaks[:i]
-                            vals = np.sort(vals)[:i]
-                            print('to:')
-                            print(vals)
+                            print(f'Prev {prev}, curr {curr} -> trimming to {i}:')
+                            #peaks = np.split(sorted_peaks, [i-2])
+                            vals = np.split(vals, [i-2])[0]
                         else: continue
                 gain, perr, gain_popt = self.__mca_gain(vals,weird, bins,peaks, multiplication=bins)
                 calib_peak, calib_count = self.__calibrate_gain(gain_popt,x,y)
