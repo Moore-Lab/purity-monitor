@@ -844,20 +844,13 @@ class Gat_HPC:  #   Gain Analysis Tool
     def __find_best_MCA(self, file, min_peaks, min_bin, max_bin, min_prominence, max_prominence, min_distance, max_distance):
         fits, errs = [], []
         x, y = self.waveforms[file]
-        x = x[250:]
-        y = y[250:]
+        x = x[500:]
+        y = y[500:]
 
         bin_start = min_bin
         bin_stop = max_bin
         bin_step = 1 #  DO NOT SET THIS TO FLOAT VALUES --> REBIN ONLY TAKES INTS AND CONVERTS TO INT ANYWAY!!!!!!
         bins = np.arange(bin_start,bin_stop, bin_step)
-
-        for bin in bins:
-            x1,y1 = self.rebin(x,y,bin)
-            plt.plot(x1,y1)
-            plt.title(str(bin))
-            plt.xlim(0,5*bin)
-            plt.show()
 
         prominence_start = min_prominence
         prominence_stop = max_prominence
@@ -896,7 +889,7 @@ class Gat_HPC:  #   Gain Analysis Tool
 
             self.log(f'Started multiprocessing on {multiprocessing.cpu_count()} CPUs',4)
             pool = Pool()
-            pool.starmap(self.perm_run_MCA, args)
+            pool.starmap(self.perm_run_MCA_2, args)
             pool.close()
             #self.perm_run_MCA((13,80,3),x,y,min_peaks,max_error,trials)
 
@@ -926,13 +919,71 @@ class Gat_HPC:  #   Gain Analysis Tool
 
             if not best is None: 
                 self.log(f'Best found at prominence {best[1]}, distance {best[2]}, bins {best[0]} for {len(trials)} trials',1)
-
+                self.gauss_peaks_MCA(self.perm_run_MCA_2(best,x,y,min_peaks,max_error,trials),None,x,y,max_error,plot=True)
             else:
                 self.log('Fatal error: could not load any peaks!',3)
                 return None
 
             #self.__mca_fit_peaks2(min_peaks,best[0],x,y,prominence=best[1],distance=best[2],plot=True)
             return best
+
+    def perm_run_MCA_2(self, perm, x,y, min_peaks, max_error, trials):
+        x, y = self.rebin(x,y,perm[0])
+        peaks,pdict = find_peaks(y,prominence=perm[1],distance=perm[2])
+        
+        if len(peaks) == 0: return False
+        if len(peaks) >= min_peaks:
+            perrs, pks = self.gauss_peaks_MCA(peaks,pdict,x,y,max_error,plot=False)
+            if not True in (np.asarray(perrs) > max_error) and len(pks) >= min_peaks:
+               trials[perm] = (pks,perrs)
+               return pks
+            
+ 
+    def gauss_peaks_MCA(self,peaks,pdict,x,y,max_error,plot=False):
+        
+        err_temp = []
+        gain_temp = []
+        
+        fit_peak_x = x[peaks[0]]
+        fit_peak_amp = y[peaks[0]]
+        x_idx_array=(y<0.5*fit_peak_amp) & (x>fit_peak_x)# returns a boolean array where both conditions are true
+        right_side_x= x[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+        sigma_guess=np.abs(fit_peak_x-right_side_x) #We need this to fit the width of the Gaussian peaks
+
+        cut= (x < fit_peak_x+sigma_guess) & (x > fit_peak_x-sigma_guess)
+        popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[fit_peak_amp,fit_peak_x,sigma_guess],maxfev=100000)
+        #err_temp.append(np.sqrt(np.diag(pcov))[1])
+
+        if plot:
+            plt.figure(figsize=(12,2)) # Call the figure here
+            plt.subplot(1,3,1) #This subplot will plot the position of the peaks and also the data
+            plt.xlim(0,total_bins*3)
+            plt.suptitle(f'P: {PROMINENCE}, D: {DISTANCE}, MIN: {min_peaks}, BINS: {total_bins}')
+            # plt.ylim(0,50)
+            plt.yscale('log')
+            plt.plot(x[peaks],y[peaks],'*') # plot the peak markers
+            plt.plot(x,y,lw=1) #plot the signal
+            plt.plot(x[cut],self.gauss(x[cut],*popt),color='green',label='Fit',lw=2,alpha=0.5) # Here we plot the fit on the 2nd peak to see if everything looks ok.
+    
+        for i,peak in enumerate(peaks): #here we ignore the first peak because it could be the pedestal
+            new_first_pe_max=x[peak] #x-value of the peak
+            new_max_value=y[peak] #height of the peak
+            new_x_idx_array=(y<0.5*new_max_value) & (x>new_first_pe_max) # returns a boolean array where both conditions are true
+            new_right_side_x= x[np.where(new_x_idx_array)[0][0]] #finding the first time where x_idx_array is True
+            new_sigma_guess=np.abs(new_first_pe_max-new_right_side_x) #We need this to fit the width of the Gaussian peaks
+
+
+            new_cut= (x < new_first_pe_max+new_sigma_guess) & (x > new_first_pe_max-new_sigma_guess) # This cut helps to fix the width of the peak-fit
+            popt_new,pcov_new=curve_fit(self.gauss,x[new_cut],y[new_cut],p0=[new_max_value,new_first_pe_max,new_sigma_guess],maxfev=100000) # We use curve_fit to return the optimal parameters and the covariance matrix
+            if plot: plt.plot(x[new_cut],self.gauss(x[new_cut],*popt_new),color='r',label='Fit',lw=3) # Here we plot the fit on all the peaks
+            gain_temp.append(popt_new[1]) #Here we append the value of the peak fit mean
+            err_temp.append(np.sqrt(np.diag(pcov_new))[1])
+
+        if plot: plt.show()
+        #print(f'Returning {gain_temp}')
+        #weird = y[peaks[2]]/total_bins<90
+        return (err_temp, peaks)
+        
 
     def perm_run_MCA(self, perm, x,y, min_peaks, max_error, trials):
 
@@ -1204,8 +1255,8 @@ class Gat_HPC:  #   Gain Analysis Tool
         calib_count=[]
 
         x, y = self.waveforms[file]
-        x = x[250:]
-        y = y[250:]
+        x = x[500:]
+        y = y[500:]
         x,y = self.rebin(x,y, total_bins)
 
         gain_temp=[]#reset the gain temp list here to store gain values for one file
