@@ -139,13 +139,13 @@ class Gat_HPC:  #   Gain Analysis Tool
         voltages = []
         if self.data_type == self.RAW:
             self.source_files = glob.glob(base_regex+filename_regex)
-            voltages = [x.split('_')[3] for x in self.source_files]
+            voltages = [x.split('_')[-2] for x in self.source_files]
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
             voltages = np.unique(voltages)
         else:
             print(f'Looking at {base_regex+filename_regex}')
             self.source_files = glob.glob(base_regex+filename_regex)
-            voltages = [x.split('_')[3] for x in self.source_files]
+            voltages = [x.split('_')[-2] for x in self.source_files]
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
             voltages = np.unique(voltages)
 
@@ -186,8 +186,8 @@ class Gat_HPC:  #   Gain Analysis Tool
     def __load_files_MCA(self,base_regex,filename_regex,voltage):
         if self.error: self.__throw_error()
         
-        #reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
-        reg = base_regex + filename_regex
+        reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
+        #reg = base_regex + filename_regex
         files = natsorted(glob.glob(reg))
         self.source_files = files
         for file in files:
@@ -890,7 +890,7 @@ class Gat_HPC:  #   Gain Analysis Tool
 
             self.log(f'Started multiprocessing on {multiprocessing.cpu_count()} CPUs',4)
             pool = Pool()
-            pool.starmap(self.perm_run_MCA_2, args)
+            pool.starmap(self.perm_run_MCA, args)
             pool.close()
             #self.perm_run_MCA((13,80,3),x,y,min_peaks,max_error,trials)
 
@@ -920,7 +920,7 @@ class Gat_HPC:  #   Gain Analysis Tool
 
             if not best is None: 
                 self.log(f'Best found at prominence {best[1]}, distance {best[2]}, bins {best[0]} for {len(trials)} trials',1)
-                self.gauss_peaks_MCA(self.perm_run_MCA_2(best,x,y,min_peaks,max_error,trials),None,x,y,max_error,plot=True)
+                #self.gauss_peaks_MCA(self.perm_run_MCA_2(best,x,y,min_peaks,max_error,trials),None,x,y,max_error,plot=True)
             else:
                 self.log('Fatal error: could not load any peaks!',3)
                 return None
