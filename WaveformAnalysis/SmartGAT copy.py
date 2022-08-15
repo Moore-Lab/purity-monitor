@@ -36,6 +36,7 @@ from multiprocessing import Process, Manager, Pool
 import multiprocessing
 import tracemalloc
 import h5py
+from Pulse import Pulse
 
 importlib.reload(Dataset)
 importlib.reload(SiPM)
@@ -43,9 +44,9 @@ importlib.reload(Waveform)
 
 __author__ = "Tiziano Buzzigoli"
 __credits__ = ["Tiziano Buzzigoli", "Avinay Bhat"]
-__version__ = "1.0.1"
-#__maintainer__ = "Rob Knight"
-#__email__ = "rob@spot.colorado.edu"
+__version__ = "1.0.6"
+#__maintainer__ = "TBD"
+#__email__ = "t.buzzigoli@studenti.unipi.it"
 __status__ = "Development"
 
 # LOGGER SETTINGS AND VARIABLES
@@ -69,7 +70,7 @@ pp = pprint.PrettyPrinter(indent=4)
 #colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 mpl.rcParams['figure.dpi']= 200
 
-class Gat_HPC:  #   Gain Analysis Tool
+class SmartGAT:  #   GAT: Gain Analysis Tool
 
     CHANNEL = 0 # TODO SET A CHANNEL FROM WHICH TO TAKE WAVEFORM DATA
     source_files = []
@@ -78,7 +79,7 @@ class Gat_HPC:  #   Gain Analysis Tool
     error = True
     SiPM = None
     shaping_time = 1e-5
-    waveforms = {}
+    pulses = []      # array of Pulses (even empty ones representing just fits)
     waveform_fit_params = []
     hist_params = []
     hist_data = ([],[])
@@ -177,10 +178,14 @@ class Gat_HPC:  #   Gain Analysis Tool
             self.SiPM.get_sampling()
             if not self.shaping_time is None: self.SiPM.shaping_time=[self.shaping_time]
             self.SiPM.Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPM.Ch[self.CHANNEL].Amp, cutoff=150)
-            #self.SiPMs[volt].setup_butter_filter() # calculate the butterworth filter coefficients
+            
+            for waveform in self.SiPM.Ch[self.CHANNEL].Amp:
+                self.pulses.append(Pulse(waveform,self.SiPM.Ch[self.CHANNEL].Time))
+
         if len(self.SiPM.Files) == 0: self.SiPM = None
         print()
         print()
+
         self.eval_waveform_func_fit(fix_params=True)
 
     def __load_files_MCA(self,base_regex,filename_regex,voltage):
@@ -210,7 +215,10 @@ class Gat_HPC:  #   Gain Analysis Tool
             bounds = [0,len(self.SiPM.Ch[self.CHANNEL].Amp[0])]
 
 
-        fit_params = self.__open_coords()
+        if not self.__open_coords():    # creates pulses (or fits) array otherwise returns false and the code below executes
+
+            
+
         if not fit_params or reload:
 
             coords = []     #   x,y coordinate arrays organized in one tuple per waveform

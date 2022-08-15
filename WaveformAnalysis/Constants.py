@@ -18,19 +18,27 @@ __version__ = "1.0.1"
 __status__ = "Development"
 
 
-class PulseType:
+class PulseType: #8
 
     UNSET = 0
-    STANDARD = 1
-    MULTIPLE_PEAKS = 2
     LATE = 3
     EARLY = 4
+    ALIGNED = 8
     FLAT = 5
-    SATURATED = 6
-    NOISY = 7
+    class Shape:
+        STANDARD = 1
+        SATURATED = 6
+        NOISY = 7
+        MULTIPLE_PEAKS = 2
+
+
 
 class Status:
 
     NONE = 0
     INIT = 1
     ERROR = 2
+    CLEARED = 3
+    FAILED = 4
+    FITTED = 5
+    EXC_GAP = 6
