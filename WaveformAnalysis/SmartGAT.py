@@ -188,7 +188,9 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         print()
         print()
 
-        self.eval_waveform_func_fit(fix_params=True)
+        print(self.pulses)
+
+        #self.eval_waveform_func_fit(fix_params=True)
 
     def __load_files_MCA(self,base_regex,filename_regex,voltage):
         if self.error: self.__throw_error()
@@ -218,7 +220,6 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
 
 
         if not self.__open_coords():    # creates pulses (or fits) array otherwise returns false and the code below executes
-
             pass
 
         if not fit_params or reload:

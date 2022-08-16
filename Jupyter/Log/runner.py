@@ -184,7 +184,7 @@ class Runner:
                     f.close()
             else:
                 if not os.path.exists('./data'): os.mkdir('data')
-                with open(f'data/{voltage}@{frequency}.txt','w') as f:
+                with open(f'{voltage}@{frequency}.txt','w') as f:
                     f.write(f'{best_fit_perm}:{final_dict[f"{voltage:02f}@{frequency:0.2f}"]}')
                     f.close()
 
@@ -401,6 +401,7 @@ class Runner:
                     plt.plot(x1[peak_lx:peak_rx],self.gauss(x1[peak_lx:peak_rx],*popt),color='red')
                     plt.vlines(fitted,0,50,colors=['blue'],linestyles='dotted')
                     plt.scatter([pks[ii]],[y1[pks[ii]]],30,'magenta','*')
+                    continue
                 else:
                     plt.plot(x1[peak_lx:peak_rx],self.gauss(x1[peak_lx:peak_rx],*popt),color='lime')
                     plt.vlines(fitted,0,50,colors=['blue'],linestyles='dotted')
