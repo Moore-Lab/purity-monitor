@@ -12,6 +12,8 @@ from multiprocessing import Pool, Manager
 from ipywidgets import IntProgress
 from IPython.display import display
 import itertools
+from queue import Queue
+from threading import Thread
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -30,9 +32,9 @@ class Runner:
     #distance_start = 5
     #distance_stop = 50
     #distance_step = 2
-    distance_factor = 400
+    distance_factor = 500
 
-    min_peaks = 3
+    min_peaks = 5
     max_error = 1.0
 
     def __init__(self):
@@ -50,8 +52,9 @@ class Runner:
                 voltage = file.split('_')[-2]
                 voltage = float(voltage.split('OV')[0])
                 frequency = float(file.split('/')[-2].split('kHz')[0])
-                if not os.path.exists(f'data/{voltage}@{frequency}.txt'): args.append([file,final_dict])
-                else: not_pool.append(file)
+                args.append([file,final_dict])
+                #if not os.path.exists(f'data/{voltage}@{frequency}.txt'): args.append([file,final_dict])
+                #else: not_pool.append(file)
 
             for file in not_pool:
                 print(file,' not pooled')
@@ -60,7 +63,7 @@ class Runner:
             if not pool:
                 print('Multiprocessing: \u001b[31m OFF \u001b[0m')
                 for arg in args:
-                    self.magic(arg)
+                    self.magic(*arg)
             else:
                 print('Multiprocessing: \u001b[46m ON \u001b[0m')
                 pool = Pool()
@@ -94,7 +97,7 @@ class Runner:
         else:
             print('creating new')
             
-            pind, pdict = find_peaks(y, prominence=2000)
+            pind, pdict = find_peaks(y, prominence=2000,distance=1000)
             #print(pind)
             #print(pdict)
             #print(f'Working on {os.path.split(file)[1]}')
@@ -129,13 +132,16 @@ class Runner:
 
             perms = [item for item in itertools.product(np.arange(self.bin_start, self.bin_stop,self.bin_step),np.arange(self.prominence_start, self.prominence_stop,self.prominence_step))]
 
-            f = IntProgress(value=0,min=0,max=len(perms),step=1,description='Loading MCA perms...',bar_style='info',layout={"width": "100%"})
+            f = IntProgress(value=0,min=0,max=len(perms),step=1,description=f'{frequency:.2f}@{voltage:.1f}V',bar_style='info',layout={"width": "100%"})
             display(f)
 
             trials = {}
             for perm in perms:
                 f.value += 1
-                self.perm_run(perm,x,y,self.min_peaks,self.max_error,trials)
+                worker = Thread(target=self.perm_run, args=(perm,x,y,self.min_peaks,self.max_error,trials))
+                worker.start()
+                worker.join()
+                #self.perm_run(perm,x,y,self.min_peaks,self.max_error,trials)
 
             #{'fitted':fitted,'fitted_errs':fitted_errs,'low_comb':lowest_comb,'total_sel':total_selected,'index_sel':index_selected,'gain_sel':gain_selected,'perr_sel':perr_selected,'cumulative':cumulative}
             fits_obtained = {}
@@ -145,7 +151,7 @@ class Runner:
                 plt.plot(x,y)
                 plt.title('raw')
                 plt.show()
-                self.plot_run((20,20),x,y,self.min_peaks,self.max_error,True)
+                self.plot_run((20,20),x,y,self.min_peaks,self.max_error,voltage,frequency,True)
 
             for p in trials.keys():
                 fitted_peaks = trials[p]['fitted']
@@ -159,16 +165,18 @@ class Runner:
                 prominence, distance = p
                 fit_quality = total_selected/sigma_selected
                 plt.scatter([prominence],[fit_quality],30,'blue','*')
+                if sigma_selected > 3: continue
                 fits_obtained[fit_quality] = p
             plt.show()
 
             try:
                 best_fit_quality = np.max([*fits_obtained])
                 best_fit_perm = fits_obtained[best_fit_quality]
-                print(f'Selected {best_fit_perm} for {best_fit_quality} best quality!')
-                self.plot_run(best_fit_perm,x,y,self.min_peaks,self.max_error,True)
+                print(f'Selected {best_fit_perm} for {best_fit_quality} best quality! (sigma: {trials[best_fit_perm]["perr_sel"]}')
+                self.plot_run(best_fit_perm,x,y,self.min_peaks,self.max_error,voltage, frequency,True)
                 final_dict[f'{voltage:02f}@{frequency:0.2f}'] = (trials[best_fit_perm]['gain_sel'],trials[best_fit_perm]['perr_sel'])
             except Exception as e:
+                print(e)
                 if not os.path.exists('./data'): os.mkdir('data')
                 with open(f'data/backup_{voltage}@{frequency}.txt','w') as f:
                     for k in trials.keys():
@@ -177,7 +185,7 @@ class Runner:
             else:
                 if not os.path.exists('./data'): os.mkdir('data')
                 with open(f'data/{voltage}@{frequency}.txt','w') as f:
-                    f.write(f'{k}:({trials[best_fit_perm]["gain_sel"]},{trials[best_fit_perm]["perr_sel"]})')
+                    f.write(f'{best_fit_perm}:{final_dict[f"{voltage:02f}@{frequency:0.2f}"]}')
                     f.close()
 
 
@@ -294,7 +302,7 @@ class Runner:
                 fitted_errs.append(perr)
                 cumulative += perr
 
-            cumulative = cumulative/len(pks)
+            cumulative = cumulative/len(fitted)
 
             lowest_comb = 1000
             popt, pcov, perr = None, None, None
@@ -305,12 +313,13 @@ class Runner:
 
             for ii in np.arange(len(fitted),min_peaks-1,-1):
                 for yy in np.arange(0,len(fitted)-ii+1,1):
-                    peaks = np.asarray(fitted[yy:yy+ii])*bins
-                    perrs = np.asarray(fitted_errs[yy:yy+ii])*bins
+                    peaks = np.asarray(fitted[yy:yy+ii])
+                    perrs = np.asarray(fitted_errs[yy:yy+ii])
 
                     try: popt,pcov = curve_fit(self.line,np.arange(1,len(peaks)+1),peaks,maxfev=100000,sigma=perrs)
                     except: continue
                     perr = np.sqrt(np.abs(np.diag(pcov)))[1]
+                    if perr > 2: continue
                     comb = perr/ii
                     if comb < lowest_comb:
                         lowest_comb = comb
@@ -326,7 +335,7 @@ class Runner:
             print(e)
             return False
 
-    def plot_run(self, p,x,y,min_peaks,max_error, plot=True): # False if it fails, 
+    def plot_run(self, p,x,y,min_peaks,max_error, voltage, frequency, plot=True): # False if it fails, 
     
         bins = p[0]
         prominence = p[1]
@@ -338,7 +347,7 @@ class Runner:
             pks, pdict = find_peaks(y1,prominence=prominence,distance=distance)
 
             if len(pks) < min_peaks or len(pks) == 0: return False
-
+            plt.suptitle(f'{frequency:.2f}kHz @ {voltage:.2f}OV')
             plt.scatter([pks],[y1[pks]],20,'red','*')
 
             x2 = np.flip(x1)
@@ -351,7 +360,7 @@ class Runner:
 
             plt.subplot(1,2,1)
             plt.plot(x1,y1)
-            plt.xlim(0,max(pks))
+            plt.xlim(0,max(pks)*2)
             #plt.show()
 
             cumulative = 0
@@ -413,8 +422,8 @@ class Runner:
 
             for ii in np.arange(len(fitted),min_peaks-1,-1):
                 for yy in np.arange(0,len(fitted)-ii+1,1):
-                    peaks = np.asarray(fitted[yy:yy+ii])*bins
-                    perrs = np.asarray(fitted_errs[yy:yy+ii])*bins
+                    peaks = np.asarray(fitted[yy:yy+ii])
+                    perrs = np.asarray(fitted_errs[yy:yy+ii])
                     x_data = np.arange(1,len(peaks)+1)
 
                     try: popt,pcov = curve_fit(self.line,x_data,peaks,maxfev=100000,sigma=perrs)
@@ -435,11 +444,11 @@ class Runner:
             popt,pcov = curve_fit(self.line,x_data,peaks,maxfev=100000,sigma=perrs)
             perr = np.sqrt(np.abs(np.diag(pcov)))[1]
             plt.scatter(x_data, peaks,30,'slateblue')
-            plt.plot(x_data,self.line(x_data,*popt),'--',label=f'Gain {popt[0]:0.2f} $\pm$ {perr}')
-            plt.suptitle(f'Gain {popt[0]:0.2f} $\pm$ {perr}')
+            plt.plot(x_data,self.line(x_data,*popt),'--',label=f'Gain {(popt[0]*bins):.2f} $\pm$ {perr}')
+            plt.suptitle(f'{frequency:.2f}kHz @ {voltage:.2f}OV -> Gain {(popt[0]*bins):.2f} $\pm$ {perr}')
             plt.show()
 
-        except FileNotFoundError as e:
+        except Exception as e:
             print(e)
             plt.title('failed')
             plt.show()
