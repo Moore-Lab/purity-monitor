@@ -38,11 +38,13 @@ class Pulse:
     sigma = None                # not acutal sigma --> see physics statistics on np.diag meaning and circle. (Dave's explanation) Will implement better sigma analysis some day (TODO)
     alignment = PulseType.UNSET
     shape = PulseType.UNSET # 1 = signle peak normal, 2 = multiple peaks, 3 = late/early, 4 = 
+    
+    selected = False
 
     baseline = None
 
     std_mu, std_sigma, std_tau, std_correction = None, None, None, None
-    mu, tau, sigma = None   # used for estimation
+    mu, tau, sigma = None, None, None   # used for estimation
 
     def __init__(self, waveform_or_amp, time_or_sigma) -> None:
         #WARNING: waveform must be baseline-adjusted! --> peak-finding might otherwise fail!
@@ -60,13 +62,16 @@ class Pulse:
             self.amplitude = max(self.signal)
 
         else:
+            print('error')
             self.status = Status.ERROR
 
     # --- CHARACTERIZATION ---
 
     def charachterize(self):
-        if Status.ERROR: raise Exception('There was an error in the Pulse object you are trying to use')
+        if self.status == Status.ERROR: raise Exception('There was an error in the Pulse object you are trying to use')
         if self.empty: raise Exception('Attempting to characterize an empty pulse! (use only as a fit container)')
+
+        if self.status is Status.CLEARED: return
 
         if self.__has_peaks():      # we have something to work one if there are peaks, let's do it under this "if"
             if self.__is_aligned(): # looking good so far
@@ -110,10 +115,10 @@ class Pulse:
     def __is_aligned(self):
         pks = find_peaks(self.signal,prominence=(self.amplitude*0.8),distance=20)[0]
         
-        if pks[0] > 220:
+        if self.time[pks[0]] > 240:
             self.alignment = PulseType.LATE
             return False
-        elif pks[0] < 180:
+        elif self.time[pks[0]] < 180:
             self.alignment = PulseType.EARLY
             return False
         else:
@@ -133,7 +138,7 @@ class Pulse:
         return self.std_correction * (base + A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma)))
 
     def study(self, std_mu, std_sigma, std_tau, std_correction):    # requires approximate values for std_mu, std_sigma, std_tau and correction factor
-        if Status.ERROR: raise Exception('There was an error in the Pulse object you are trying to use')
+        if self.status == Status.ERROR: raise Exception('There was an error in the Pulse object you are trying to use')
         if self.empty: raise Exception('Attempting to study an empty pulse! (use only as a fit container)')
 
         self.std_mu = std_mu
@@ -191,4 +196,6 @@ class Pulse:
         pks, pdict = find_peaks(self.signal,prominence=(self.amplitude*0.8),distance=20)
         self.amplitude = self.signal[pks[0]]
         self.mu = pks[0]
+        return self
+
 
