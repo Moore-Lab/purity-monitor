@@ -9,6 +9,7 @@ Multi-core processing should be implemented when instantiating this class. Might
 
 # IMPORTS
 from argparse import ArgumentError
+from hashlib import algorithms_guaranteed
 import sys, glob,importlib, latex, itertools, os
 sys.path.insert(0,'../../')
 sys.path.insert(0,'/Library/TeX/texbin/')
@@ -60,10 +61,10 @@ ANSI_YELLOW = '\u001b[33m'
 ANSI_BG_RED = '\u001b[41m'
 ANSI_BG_GREEN = '\u001b[42m'
 
-olderr = np.seterr(all='ignore') 
-scipy.special.seterr(all='ignore')
-import warnings
-warnings.filterwarnings("ignore")
+olderr = np.seterr(all='ignore')  # necessary to make the output cleaner. Turn off to debug
+scipy.special.seterr(all='ignore') # necessary to make the output cleaner. Turn off to debug
+import warnings # necessary to make the output cleaner. Turn off to debug
+warnings.filterwarnings("ignore") # necessary to make the output cleaner. Turn off to debug
 
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -75,70 +76,72 @@ mpl.rcParams['figure.dpi']= 200
 class SmartGAT:  #   GAT: Gain Analysis Tool
 
     CHANNEL = 0 # TODO SET A CHANNEL FROM WHICH TO TAKE WAVEFORM DATA
-    source_files = []
+    source_files = []   #   stores the 
     max_bins = 10000
     voltage = None
     error = True
-    SiPM = None
-    shaping_time = 1e-5
-    pulses = []      # array of Pulses (even empty ones representing just fits)
-    waveform_fit_params = []
-    hist_params = []
-    hist_data = ([],[])
-    hist_fit_params = []
-    peaks_final = None
-    peaks_final_perr = None
-    gain_evaluation = None
-    gain_fit_params = []
-    tau_est_final = None
-    data_type = 0
+    estimate_parameters = True
+    SiPM = None         # used to store SiPM object
+    shaping_time = 1e-5 # currently not used. No shaping filter is applied. – DEPRECATED
+    pulses = []      # array of Pulses (even empty ones representing just fits). Refer to the Pulse class
+    waveform_fit_params = []    # TODO will become obsolete
+    hist_params = []            # plotting parameters
+    hist_data = ([],[])         # plotting data
+    hist_fit_params = []        # ""
+    peaks_final = None          # ""
+    peaks_final_perr = None     # ""
+    gain_evaluation = None      # gain evaluation
+    gain_fit_params = []        # ""
+    tau_est_final = None        # this will be set to the tau estimate when an estimate is requested
+    data_type = 0               # 0 for RAW, 1 for MCA
     silenced = False
 
-    mca_gain_eval = (None,None,None)
+    mca_gain_eval = (None,None,None)    # gain from MCA functions response object
 
     MCA = 1
     RAW = 0
 
-    def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,force=False,notify=False,channel=0,data_type=0):
+    def __init__(self, base_regex,filename_regex,voltage, shaping_time=None, silenced=False,debug=False,notify=False,channel=0,data_type=None):
 
-        tracemalloc.start()
-        self.debug = debug
-        self.notifications = notify
-        self.silenced = silenced
-        self.update(60,'INIT')
-        self.CHANNEL = channel #TODO add type check and handle errors related to this
-        self.data_type = data_type
+        tracemalloc.start() # memory tracing begins
+        self.debug = debug  # setting the specified log level. See the log method
+        self.notifications = notify # setting the specified push notifications level. See the notify method
+        self.silenced = silenced    # setting the notification level.
+        self.update(60,'INIT')      # setting the monitoring website.
+        self.CHANNEL = channel      # data channel in the hp5 files
 
-        try: voltage = float(voltage)
+        try: voltage = float(voltage)   # check if voltage can be a float value
         except:
             error = True
             raise(TypeError(f'Inappropriate argument provided for voltage: int or float expected but {voltage} ({type(voltage)}) was given.'))
         else:
-            if not self.__check_available(voltage,base_regex,filename_regex):
+            if not self.__check_available(voltage,base_regex,filename_regex):   # check if the requested voltage is among the files provided to the class
                 error = True
                 raise(ValueError(f'The voltage you requested ({voltage}) is not available. Try modifying the directory and/or filename you requested.'))
             else:
-                self.voltage = float(voltage)
+                self.voltage = float(voltage)   # save and store the voltage for this class.
 
-        if self.source_files is None or len(self.source_files) == 0:
+        if self.source_files is None or len(self.source_files) == 0:    # no files loaded
             error = True
-            raise(FileNotFoundError('Unable to locate source files located at '+(base_regex+filename_regex)))
-        elif self.voltage is None:
-            self.error = True
-            raise(FileNotFoundError('The files you are trying to load are missing voltage information in their names i.e.'+self.source_files[0]))
-        elif not shaping_time is None and not type(shaping_time) is type(1e-1):
+            raise(FileNotFoundError('Unable to locate source files with proper voltage information located at '+(base_regex+filename_regex)))
+        elif not shaping_time is None and not type(shaping_time) is type(1e-1): # IF a shaping time is specified then it must be of that type otherwise an error will be raised
             self.error = True
             raise(ValueError('Shaping time must be a number (i.e. 1e-1). Only one shaping time per Gat instance is allowed'))
         else:
-            self.error = False
-            self.shaping_time = shaping_time
-            if data_type == self.MCA: self.__load_files_MCA(base_regex,filename_regex,voltage)
-            elif data_type == self.RAW: self.__load_files(base_regex,filename_regex)
+            self.error = False  # set the class in a non-error general state. Every method will check for the general health of the class and will not execute if this flag is True to prevent unexpected results and ensure data integrity.
+            self.shaping_time = shaping_time    # none is default
+            
+            if data_type is None: self.data_type = self.__guess_type(base_regex,filename_regex) # guess data type (RAW or MCA) based on file structure. 
+            
+            if self.data_type == self.MCA: self.__load_files_MCA(base_regex,filename_regex) # load files from MCA
+            elif self.data_type == self.RAW: self.__load_files(base_regex,filename_regex) # load files RAW
+            
             if self.SiPM is None: self.log(f'FATAL ERROR: Could not load files for {base_regex+filename_regex} !',3)
             elif self.data_type == self.MCA: self.log(f'{len(self.source_files)} files of MCA data loaded for {self.voltage:.02f} OV',1)
             elif self.data_type == self.RAW: self.log(f'{len(self.source_files)} files of RAW data loaded for {self.voltage:.02f} OV',1)
 
     def __check_available(self, voltage, base_regex, filename_regex): 
+        # checks if the voltage requested is available in the files provided. Returns false otherwise
         voltages = []
         if self.data_type == self.RAW:
             self.source_files = glob.glob(base_regex+filename_regex)
@@ -146,7 +149,6 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
             voltages = np.unique(voltages)
         else:
-            print(f'Looking at {base_regex+filename_regex}')
             self.source_files = glob.glob(base_regex+filename_regex)
             voltages = [x.split('_')[-2] for x in self.source_files]
             voltages = np.array(sorted([float(x.split('OV')[0]) for x in voltages]))
@@ -158,61 +160,87 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
     def __throw_error(self):
         raise(RuntimeError('The Gat object you are attempting to reach has experienced an unexpected error and is unable to perform the method you called at this time')) #TODO make error more descriptive so that you can reprint it here
 
+    def __guess_type(self, base, filename):
+        reg = base + filename+'_{:.2f}OV*.h5'.format(float(self.voltage))
+        try:
+            test_file = h5py.File(natsorted(glob.glob(reg))[0], 'r')
+            if 'Time' in test_file.keys(): return self.RAW # the Time key is only found in raw waveform files (of course)
+            else: return self.MCA
+        except: return None
+
     def force_reload(self,base_regex,filename_regex):
+        # the class will retain the loaded files. This method forces the reload of SiPM data and files. Useful when running long notebooks if you do not wish to reload everything to just reset an instance of this class.
         self.SiPM = None
         if self.data_type == self.RAW: self.__load_files(base_regex,filename_regex)
-        else: self.log('Force reload only applies to RAW waveform data. This GAT instance is set to MCA data.',2)
+        else: self.log('Force reload only applies to RAW waveform data, but this SmartGAT instance is set to handle MCA data.',2)
 
     def __load_files(self,base_regex,filename_regex):
-        if self.error: self.__throw_error()
+        if self.error: self.__throw_error() # status check
+
+        #plt.figure(figsize=(10,6))
+        #plt.rcParams.update({'axes.edgecolor': 'w','axes.labelcolor': 'w','xtick.color': 'w','ytick.color': 'w'})
 
         if not self.SiPM is None:
-            self.log('WARNING: files already loaded!',2)
+            self.log('WARNING: files already loaded! Call force_reload(base_regex, filename_regex) to force reload.' ,2)
             return
         
         self.SiPM = SiPM.SiPM(Path=base_regex, Selection=filename_regex+'_{:.2f}OV*.h5'.format(self.voltage))
-        self.log(f'Loading {filename_regex}_{self.voltage:.2f}OV*.h5 returned {len(self.SiPM.Files)} files',4)
         self.SiPM.Ch = [Waveform.Waveform(ID=x, Pol=1) for x in range(1,3)]
 
+        self.log(f'Loading {filename_regex}_{self.voltage:.2f}OV*.h5 returned {len(self.SiPM.Files)} files',4)
+
         for file in natsorted(self.SiPM.Files):
-            print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r')
+            print(f'Memory usage (traced): {tracemalloc.get_traced_memory()[0]/1000000:.02f} MB',end='\r') # only traced memory will be available here.
             self.SiPM.ImportDataFromHDF5(file, self.SiPM.Ch, var=[])
             self.SiPM.get_sampling()
             if not self.shaping_time is None: self.SiPM.shaping_time=[self.shaping_time]
             self.SiPM.Ch[self.CHANNEL].SubtractBaseline(Data=self.SiPM.Ch[self.CHANNEL].Amp, cutoff=150)
             
             for waveform in self.SiPM.Ch[self.CHANNEL].Amp:
-                self.pulses.append(Pulse(waveform,self.SiPM.Ch[self.CHANNEL].Time))
+                """plt.figure(facecolor=(0,0,0,0))
+                plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform,'white')
+                plt.xlabel('Time [microseconds]')
+                plt.ylabel('Amplitude [volts]')
+                #plt.show()
+                plt.savefig('/Users/tizi/Desktop/wave_.png', transparent=True)"""
+                self.pulses.append(Pulse(waveform,self.SiPM.Ch[self.CHANNEL].Time)) # creates an array of Pulse instances, each one represetning a raw pulse class
 
         if len(self.SiPM.Files) == 0: self.SiPM = None
         print()
         print()
+        if not self.__resolve_wf_fit_params(): self.log(f'WARNING: will proceed without fixed parameters!',2)
 
+<<<<<<< HEAD
+        self.eval_waveform_func_fit() # TODO here for testing purposes only
+=======
         print(self.pulses)
 
         #self.eval_waveform_func_fit(fix_params=True)
+>>>>>>> a1e5e451dfca3a1e80d256723b535b89dc690d45
 
-    def __load_files_MCA(self,base_regex,filename_regex,voltage):
-        if self.error: self.__throw_error()
+        #self.eval_waveform_func_fit(fix_params=True)
+
+    def __load_files_MCA(self,base_regex,filename_regex):
+        if self.error: self.__throw_error() # status check
         
-        reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(voltage))
-        #reg = base_regex + filename_regex
+        reg = base_regex + filename_regex+'_{:.2f}OV*.h5'.format(float(self.voltage))
         files = natsorted(glob.glob(reg))
-        self.source_files = files
+        self.source_files = files # storing list of files. This ONLY happens for MCA data!
         for file in files:
             f = h5py.File(file, 'r')  
             ch2 = f.get('ch2')
             for key in ch2.keys(): 
                 df = np.array(ch2.get(key))
-            h = df[250:]
+            h = df[250:]    # removing part of data which is useless due to it being part that leads to the pedestal.
             hx = np.arange(0,len(h),1)
             self.waveforms[file] = (hx,h)
-            self.SiPM = 'Set'
+            self.SiPM = 'Set'   # this prevents it from being set to none which would cause the program to raise an error when checking for the data integrity which is type-independent. Any value other than none would be acceptable.
         
     def eval_waveform_func_fit(self, bounds=None,reload=False,fix_params=False):
-        if self.error: self.__throw_error()
+        # evaluate a waveform trying to fit a function to it
+        if self.error: self.__throw_error() # status check
 
-        if bounds is None: bounds = [0,len(self.SiPM.Ch[self.CHANNEL].Amp[0])]
+        if bounds is None: bounds = [0,len(self.SiPM.Ch[self.CHANNEL].Amp[0])] # allows to limit the signal analys segment with [start, end] format
         elif isinstance(bounds[0],int) and isinstance(bounds[1],int): bounds = bounds
         else:
             self.log('The bounds provided are not of the right format and WILL BE IGNORED. Try [int, int].',2)
@@ -222,7 +250,32 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         if not self.__open_coords():    # creates pulses (or fits) array otherwise returns false and the code below executes
             pass
 
-        if not fit_params or reload:
+        
+        amp_tester = self.__wave_func2(self.SiPM.Ch[self.CHANNEL].Time,1000,0.5) # testing the amplitude of the wave with the estimated parameters (mu and tau) and an amplitude A = 1000
+        plt.plot(self.SiPM.Ch[self.CHANNEL].Time, amp_tester) 
+        plt.show()
+        max_amp = max(amp_tester)   # get maximum of tester waveform.
+        print(max(amp_tester))
+        factor = 1000/max_amp   # factor to use to correct the fits
+        print(factor)
+        self.factor = factor    
+        self.sigma_est_final = 0.5  # I could not find a way to estimate this.
+
+        for pulse in self.pulses:   # plotting the pulses and fitting them using the func3 (USES THE ADJUSTMENT FACTOR CACLULATED ABOVE)
+            waveform = pulse.signal
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform)
+            popt,pcov = curve_fit(self.__wave_func3,self.SiPM.Ch[self.CHANNEL].Time,waveform,p0=[max(waveform),0.5],bounds=([max(waveform)-5,0.2],[max(waveform)+5,1.5]),maxfev=100000000)
+            plt.plot(self.SiPM.Ch[self.CHANNEL].Time,self.__wave_func3(self.SiPM.Ch[self.CHANNEL].Time,*popt))
+            plt.xlim(190,220)
+            plt.show()
+            print('popt ',popt)
+            print('factored ', popt*self.factor)
+            print('real max ',max(waveform))
+
+     # ! ---- THE ABOVE WAY OF FITTING WAVEFORMS IS NOT WORKING PROPERLY AND THE ESTIMATES ARE NOT GOOD ENOUGH. FOR THIS REASON DEVELOPMENT OF THIS WAS INTERRUPTED. THE THINGS BELOW ARE THE OLD WAY OF FITING THE WAVEFORMS WHICH WORKED BUT IT WAS NOT PRECISE ENOUGH FOR DAVE --- !
+        sys.exit()
+
+        if not self.estimate_parameters or reload:
 
             coords = []     #   x,y coordinate arrays organized in one tuple per waveform
             pks_tally = 0   #   keep track of how many peaks are found
@@ -378,7 +431,12 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             self.error = True
             return False
 
+    def resolve(self):
+        self.__resolve_wf_fit_params()
+
     def __check_waveform(self, waveform):
+        """ deprecated """
+
         pks = find_peaks(waveform,prominence=150,distance=30)[0]
         if len(pks) > 1:
             #plt.plot(self.SiPM.Ch[self.CHANNEL].Time,waveform)
@@ -407,92 +465,132 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return (True,True)       
                 
     def __resolve_wf_fit_params(self):
-        total = 0
-        temp = [0]*len(self.pulses[0].time)
-        correlated = 0
-        misaligned = 0
+        total = 0   # stats
+        temp = [0]*len(self.pulses[0].time)    # necessary x-axis-long array to average values for each x value.
+        correlated = 0 # stats
+        misaligned = 0 # stats
         peaks_xs = []   # was used to estimate mu variance --> understand peak dispertion for avalanches
 
-        to_plt = []
+        to_plt = [] # array of pulses to plot
 
         for pulse in self.pulses:
-            if pulse.shape is PulseType.Shape.STANDARD and pulse.alignment is PulseType.ALIGNED:
-                for ii, y in enumerate(pulse.signal): temp[ii] = temp[ii] + y
-                total += 1
-                to_plt.append(pulse.signal)
-            elif pulse.shape is PulseType.Shape.MULTIPLE_PEAKS: correlated += 1
-            elif not pulse.alignment is PulseType.ALIGNED: misaligned += 1
+            pulse.charachterize() # see Pulse class for reference. Requests an analysis of the pulse. After the analysis then pulse Shape and PulseType are available to be read as class attributes.
 
-        if len(temp) == 0:
+            if pulse.shape is PulseType.Shape.STANDARD and pulse.alignment is PulseType.ALIGNED: # only averages pulses that are aligned (on the x axis, so with the right timing) and shaped in the standard way.
+                # TODO in the future you can make it better by letting it handle and fit double peaks and oddly shaped peaks.
+                for ii, y in enumerate(pulse.signal):
+                    temp[ii] = temp[ii] + y # adding to then average
+                total += 1
+                pulse.skim()    # see Pulse class for reference. This asks for a rough estimate of the amplitude and mu obtained by skimming the pulse and not actually by performing a long (and unecessary) analysis.
+
+                peaks_xs.append(pulse.mu)   # used to verify variance of mu --> understand peak dispersion due to correlated avalanches. It has proven useful in before.
+
+                to_plt.append(pulse.signal) # will be plotted
+
+                pulse.selected = True   # for parameters estimation. as it is standard and aligned
+
+            elif pulse.shape is PulseType.Shape.MULTIPLE_PEAKS: correlated += 1 # stats
+            elif not pulse.alignment is PulseType.ALIGNED: misaligned += 1  # stats
+
+        if total < 20:  # statistically not relevant under 20. Estimation error would be too high. TODO update to any number seems more suitable.
             self.log(f'No waveforms suitable for τ estimation -> will continue \u001b[0mwithout{ANSI_RESET}{ANSI_RED} fixed parameters!',3)
             return False
 
-        avg = [float(t/total) for t in temp]
-        avg = np.asarray(avg)
-        peak_x = np.argmax(avg)
-        peak_A = avg[peak_x]
-        tau_end_val = peak_A*np.e**-1
-        tau_ind = np.where(avg[peak_x:] < tau_end_val)[0][0]
-        tau_est = self.SiPM.Ch[self.CHANNEL].Time[tau_ind]        
+        # --- BELOW MU, TAU AND SIGMA ARE ESTIMATED AS WELL AS THE BASELINE ---
+        # --- this estimation is based on argmax and other parameters that can be adjusted --- 
+        avg = np.asarray([float(t/total) for t in temp])    # average the selected pulses
+        peak_x = np.argmax(avg)     # getting the peak x value
+        peak_A = avg[peak_x]        # getting the peak amplitude
+        tau_end_val = peak_A*np.e**-1   # the y value at tau based on the equation
+        tau_ind = np.where(avg[peak_x:] < tau_end_val)[0][0]    # index (array index) of tau
+        tau_est = self.SiPM.Ch[self.CHANNEL].Time[tau_ind]   # x-value of tau
+
+        baseline = np.average(avg[0:30])    # baseline estimation. All the selected pulses begin with a flatline
         
+        sigma_ind = np.where(avg[:peak_x] < baseline*1.05)[0][0]    # index of sigma. TODO adjust the 1.05 parameter if necessary
+        sigma_est = self.SiPM.Ch[self.CHANNEL].Time[sigma_ind]      # x-value for sigma
+
+        temp_sum = 0    #   sum of he peaks' x-values
+        for px in peaks_xs: temp_sum += px  # getting the sum
+        mu_ind = int(temp_sum/len(peaks_xs))    # average of the mu of all the waveforms as estimate.
+        mu_est = self.SiPM.Ch[self.CHANNEL].Time[mu_ind]    # x-value for mu
+        
+
+        # --- BELOW IS SOME PLOTTING TO SHOW THE WORK DONE ---
+
         plt.figure(figsize=(18,6))
-        plt.suptitle(f'Filtering waveforms for {self.voltage:.02f} OV', size=16)
+        plt.suptitle(f'Estimating fit parameters for {self.voltage:.02f} OV', size=16)
         for wave in self.SiPM.Ch[self.CHANNEL].Amp:
             plt.subplot(1,2,1)
             plt.title('Unfiltered')
-            plt.xlabel('[1 = 5 μs]')
+            plt.xlabel('[1 = 5 microseconds]')
             plt.ylabel('[mV]')
             plt.plot(self.SiPM.Ch[self.CHANNEL].Time,wave,color='navy')
         #plt.savefig(f'{folder}/all.png',dpi=200,facecolor='white')
         for tp in to_plt:
             plt.subplot(1,2,2)
             plt.title('Filtered')
-            plt.xlabel('[1 = 5 μs]')
+            plt.xlabel('[1 = 5 microseconds]')
             plt.ylabel('[mV]')
             plt.plot(self.SiPM.Ch[self.CHANNEL].Time,tp,color='black')
         #plt.savefig(f'{folder}/cleaned.png',dpi=200,facecolor='white')
         plt.show()
 
-        self.log(f'ESTIMATED PARAMETERS:\n  - τ: from {peak_A:.04f} mV to {tau_end_val:.04f} -> {tau_est:.04f} μs -> {tau_ind} indexes after the peak.\n {total} out of {len(self.pulses)} waveforms recorded at {self.voltage:.02f} OV were used for this calculation',1)
+        self.log(f'ESTIMATED PARAMETERS:\n  - τ: from {peak_A:.04f} mV to {tau_end_val:.04f} -> {tau_est:.04f} μs -> {tau_ind} indexes after the peak.\n - sigma: {sigma_est:.04f} μs -> {sigma_ind} indexes before the peak.\n - mu: {mu_est:.04f} μs -> {mu_ind} indexes to the peak.\n {total} out of {len(self.pulses)} waveforms recorded at {self.voltage:.02f} OV were used for this calculation',1)
         self.log(f'WAVEFORM FILTERING:\n {(correlated+misaligned)} ({((correlated+misaligned)/total*100):.03f}%) waveforms were not selected for τ estimation:\n  - {correlated} waveforms ({(correlated/total*100):.03f}%) excluded due to unwanted correlated avalanches. (multiple peaks)\n  - {misaligned} waveforms ({(misaligned/total*100):.03f}%) excluded due to timing issues.\n',2)
 
         plt.figure(figsize=(18,6))
-        plt.suptitle(f'Estimating τ for {self.voltage:.02f} OV', size=16)
+        plt.suptitle(f'Estimating tau for {self.voltage:.02f} OV', size=16)
         plt.subplot(1,2,1)
         plt.plot(self.SiPM.Ch[self.CHANNEL].Time,avg,label='Averaged')
-        plt.vlines(self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x],0,peak_A,linestyles='dashed',colors=['red'],label='τ')
+        plt.vlines(self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x],0,peak_A,linestyles='dashed',colors=['red'],label=f'tau at {self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x]}')
         plt.legend(loc=1)
         plt.subplot(1,2,2)
         plt.plot(self.SiPM.Ch[self.CHANNEL].Time,avg,label='Averaged')
-        plt.vlines(self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x],0,peak_A,linestyles='dashed',colors=['red'],label='τ')
+        plt.vlines(self.SiPM.Ch[self.CHANNEL].Time[tau_ind+peak_x],0,peak_A,linestyles='dashed',colors=['red'],label='tau')
         plt.xlim(180,peak_x+tau_ind+50)
         plt.title('Zoomed in')
         plt.show()
+        #plt.savefig(r'/users/Tizi/desktop/fig.png')
+
+        # setting them as class variables below so they can be used by model functions
 
         self.tau_est_final = tau_est
+        self.mu_est_final = mu_est
+        self.sigma_est_final = sigma_est
 
-        #self.__peak_dispersion(peaks_xs)
-
-        return tau_est  
+        if self.__peak_dispersion(peaks_xs): return True    # if the peak are too dispersed then the data is considered not reliable as their average would result in an abnormal waveform. TODO can be remoed as the waveforms are filtered and only selected if aligned and standard-shaped.
+        
+        self.estimate_parameters = False    # the data is too diverse to allow for parameters estimation. The program will keep running without estimating the parameters before the fit.
+        return False
 
     def __peak_dispersion(self, pks):
-        self.log(f'Peak distribution shows a standard deviation of {gstd(pks)} μs',2)
-        plt.figure(figsize=(10,8))
-        plt.suptitle(f'Estimating timing σ for peaks at {self.voltage:.02f} OV', size=16)
+        # getting standard deviation of the peak x-value
+        std_dv = gstd(pks)
+        if std_dv < 1.1: self.log(f'Peak distribution shows a standard deviation of {std_dv} μs',4)
+        elif std_dv < 1.5: self.log(f'WARNING: peak timing standard deviation is elevated: {std_dv} μs. More filtering is advised',2)
+        else:
+            self.log(f'SIGNAL QUALITY ERROR: the waveforms you are trying to analyze show very diverse peak timing. Filter the data before proceeding',3)
+            return False
+        return True
+        """plt.figure(figsize=(10,8))
+        plt.suptitle(f'Estimating timing sigma for peaks at {self.voltage:.02f} OV', size=16)
         plt.hist(pks,bins=np.arange(190,230,1),histtype='bar')
-        plt.show()
-
-        #sys.exit(0)
+        plt.show()"""
 
     def __save_coords(self, fit_params):
+        """ this method is used to save waveform fit parameters instead of of entire waveforms. Much less space, much more information in each file! File size is reduced by multiple orders of magnitude """
+
+        # --- PLEASE NOTE: the np.savez function below is commented as I did not need to save the coordinates for testing purposes. Uncomment it for production!
+
         if not os.path.exists('./waveform_fits_data'): os.mkdir('waveform_fits_data')
         filename = f'./waveform_fits_data/_backup_{self.voltage:.01f}'
-        #20.8 MB vs 216 KB
+        #20.8 MB vs 216 KB --> compared to saving waveforms!!!
 
-        x_axes = []
-        popts = []
-        chis = []
-        perrs = []
+        x_axes = [] # they should all be an array of 2048 elements representing the time in us. Save it for every file just to be safe and because it will be useful later on.
+        popts = []  # model parameters
+        chis = []   # model quality parameter
+        perrs = []  # model reliability parameter
 
         for fit in fit_params:
             x_axes.append(fit['x'])
@@ -501,7 +599,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             perrs.append(fit['perr'])
         
         if len(x_axes) == len(popts) == len(chis) == len(perrs):
-            try: pass#np.savez_compressed(filename, x_axes=x_axes, popts=popts, chis=chis, perrs=perrs)
+            try: pass#np.savez_compressed(filename, x_axes=x_axes, popts=popts, chis=chis, perrs=perrs) # NOTE: uncomment for production
             except: pass
             else:
                 if os.path.exists(filename+'.npz'):
@@ -512,6 +610,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return False
     
     def __open_coords(self):
+        """ open the files created above. """
         filename = f'./waveform_fits_data/_backup_{self.voltage:.01f}.npz'
         fit_params = []
 
@@ -537,8 +636,10 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
                     return False
 
         else: return False
-                    
+               
     def __p0estimate(self,waveform):
+        """ useful to estimate mu, tau, and base to fit when the parameters have not been estimated and fixed. DEPRECATED due to a different approach being taken """
+
         temp_peaks_ind = np.asarray(find_peaks(waveform,prominence=30)[0])
         if len(temp_peaks_ind) == 0 or temp_peaks_ind is None:
             self.log('Error loading p0: could not find any peaks',4) 
@@ -585,14 +686,30 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         est_tau2 = Ds[volt].Ch[0].Time[prob_return_x] - Ds[volt].Ch[0].Time[prob_rise_x]
 
     def __wave_func(self, x, mu, A, tau, base,sigma):
-        if not self.tau_est_final is None: tau = self.tau_est_final
+        """ NO PARAMETERS ESTIMATED IN ADVANCE EXPECT FOR TAU (OPTIONAL)"""
+
+        if not self.tau_est_final is None: tau = self.tau_est_final #fixed if estimated
         return base + A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
 
-    def __wave_func2(self, x, mu, A, base,sigma):
+    def __wave_func2(self, x, A,sigma):
+        """ TAU AND MU ESTIMATED """
+
         tau = self.tau_est_final
-        return base + A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
+        #sigma = self.sigma_est_final   # TODO can use if trusted. It is not giving great results
+        mu = self.mu_est_final
+        return  A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
+
+    def __wave_func3(self, x, A,sigma):
+        """ CORRECTION FACTOR INCLUDED ! AS WELL AS ESTIMATED MU AND TAU """
+
+        tau = self.tau_est_final
+        #sigma = self.sigma_est_final
+        mu = self.mu_est_final
+        return  self.factor * A/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
 
     def eval_waveform_argmax(self, voltage, bounds=None):
+        """ initally used to get amplitude of pulses. Needs to be deprecated and removed for good as a different approach was deemed necessary. """
+
         if self.error: self.__throw_error()
         voltage = float(voltage)
         if type(voltage) == float: pass
@@ -631,15 +748,26 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         pass
 
     def __raw_eval_gain(self,voltage, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False):
-        peaks_coords = None
-        if waveform_fit:
+        """ this method allows for gain calculation after waveform analysis. Raw because it uses pulses compared to the MCA gain analysis """
+
+        peaks_coords = None # it used to be (x,y) now it is onlt [y] as the x is always the same for aligned pulses
+        if waveform_fit:    # this flag tells if the software should use model fitting or argmax to find pulse amplitude
             peaks_coords = self.eval_waveform_func_fit(voltage,fix_params=fix_params,reload=reload)[1]
-        else: peaks_coords = self.eval_waveform_argmax(voltage)[1]
+        else: peaks_coords = self.eval_waveform_argmax(voltage)[1]  # no longer supported fully. Might fail.
 
-        popt_list, perr_list = None, None
-        peaks_coords = self.__peak_filter(peaks_coords)
+        # --- GETTING THE PULSES' PEAKS COORDINATES ---
 
-        if not find_best:
+        popt_list, perr_list = None, None   # for all the waveforms
+
+        for pulse in self.pulses:
+            pulse.charachterize()
+            if pulse.alignment == PulseType.ALIGNED and pulse.shape == PulseType.Shape.STANDARD:
+                pulse.study(self.mu_est_final, self.sigma_est_final, self.tau_est_final, self.factor)
+                peaks_coords.append(pulse.amplitude)
+
+        #peaks_coords = self.__peak_filter(peaks_coords) # filters the waveforms and only returns the peaks
+
+        if not find_best:   # this flag determines if the smart algorithm should be used for peak finding. Note: if the flag is set to false then bin_width, prominence, distance and min_peaks must be passed to this method.
             popt_list,perr_list = self.__get_peaks(peaks_coords,bin_width,prominence,distance,min,plot=plot)
         else:
             #   raise(NotImplementedError('Find best has not been implemented yet! Sorry ;)'))
@@ -647,13 +775,14 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         
 
         if popt_list is False:
-            self.log(f'MAJOR ERROR: Cannot find best paramaters for find_peaks function! Cannot proceed. Review the bound.',3)
+            self.log(f'MAJOR ERROR: Cannot find best paramaters for find_peaks function! Cannot proceed. Review data and limits.',3)
             return None
 
         if popt_list is None:
-            self.log(f'MAJOR ERROR: Cannot find any peaks! Cannot proceed. Review the bound.',3)
+            self.log(f'MAJOR ERROR: Cannot find any peaks! Cannot proceed. Review data and limits.',3)
             return None
 
+        # --- PRINTING INFO --- 
         print()
         msg = ''
         print('Resulting peaks:')
@@ -668,21 +797,28 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
                 else: print(f' * {x_pos:.16g} \u00b1 {perr:.16g}')
                 msg += f' * {x_pos:.10f} \u00b1 {perr:.10f}\n'
         print(popt_list)
+
+        # --- getting the gain ---
         gain = self.__gain_from_peaks(popt_list,perr_list)
         self.gain_evaluation = gain
+
         print(f'Memory usage: {tracemalloc.get_traced_memory()[1]/1000000} MB peak')
-        tracemalloc.stop()
+        tracemalloc.stop()  # stop memory usage tracing. The memory-intensive analysis is over anyway.
+
         return gain
 
     def eval_gain(self, waveform_fit=True,find_best=False,bin_width=5,distance=12,prominence=30,min=2,plot=False,fix_params=False, reload=False,total_bins=None,min_bin=None, max_bin=None, min_prominence=None, max_prominence=None, min_distance=None, max_distance=None):
+        """ called to get the gain out of both MCA and Raw data """
+
         if self.error: self.__throw_error()
 
-        if self.data_type == self.RAW: return self.__raw_eval_gain(self.voltage,waveform_fit,find_best,bin_width,distance,prominence,min,plot,fix_params,reload)
+        if self.data_type == self.RAW:
+            return self.__raw_eval_gain(self.voltage,waveform_fit,find_best,bin_width,distance,prominence,min,plot,fix_params,reload)
 
         if self.data_type == self.MCA:
-            if find_best:
+            if find_best:   # this flag determines if the smart algorithm should be used for peak finding. Note: if the flag is set to false then bin_width, prominence, distance and min_peaks must be passed to this method.
                 return self.__mca_eval_gain(total_bins,min,best=True, min_bin=min_bin,max_bin=max_bin,min_distance=min_distance,max_distance=max_distance,min_prominence=min_prominence,max_prominence=max_prominence)
-            return self.__mca_eval_gain(total_bins,min)
+            return self.__mca_eval_gain(total_bins,min) # if find_best is True then all those parameters will be determined by the system to get the best fit
 
     def __gain_from_peaks(self, popt_list,perr_list):
         data = np.asarray([float(peak[1]) for peak in popt_list])
@@ -696,70 +832,79 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return (float(popt[1]),float(np.sqrt(np.diag(pcov)[1])))
 
     def __find_best(self, peaks_coords,method=None):
-        fits, errs = [], []
+        fits, errs = [], [] # used at the end to find the best fit.
 
-        bin_width_start = 1
-        bin_width_stop = 12
-        bin_width_step = 0.5
+        # -- TWEAK THE PARAMETERS BELOW TO YOUR LIKING. !!! NOTE THAT SOMETIMES THE BEST FIT IS A VERY PRECISE AND UNPREDICTABLE COMBINATION OF PARAMETERS !!! STATISTICAL EVIDENCE SUGGESTS THAT THE BEST WAY IS TO NOT INCRESE THE STEP SIZE OR THE MIMIMUM BIN WIDTH. I ADVISE AGAINST MODIFYING THESE PARAMETERS AS THEY ARE THE RESULT OF EXPERIENCE --- 
 
-        prominence_start = 10
-        prominence_stop = 100
-        prominence_step = 5
+        # TODO it's easy and should be done. Make this like the find_best_MCA where the user can decide these bounds as parameters passed to the method
 
-        distance_start = 10
-        distance_stop = 90
-        distance_step = 2
+        bin_width_start = 1     # MINIMUM bin width
+        bin_width_stop = 12     # MAXIMUM bin width
+        bin_width_step = 0.5    # STEP in incresing bin width
 
-        min_peaks = 5
-        max_error = 2.0
+        prominence_start = 10     # MINIMUM prominence
+        prominence_stop = 100     # MAXIMUM prominence
+        prominence_step = 5       # STEP in increasing prominence
+
+        distance_start = 10      # MINIMUM distance
+        distance_stop = 90       # MAXIMUM distance
+        distance_step = 2        # STEP in increasing distance
+
+        min_peaks = 5            # MINIMUM peaks
+        max_error = 2.0          # MAXIMUM acceptable error 
         
         #trials = {}
         last = None
-        
         best = None
-        temp_errs = []
+        temp_errs = []  # used to evaluate and compare "combined values". See below.
 
-        skipped = 0
-        done = 0
+        skipped = 0 # stats
+        done = 0    # stats
 
-        perms = [item for item in itertools.product(np.arange(bin_width_start, bin_width_stop,bin_width_step),np.arange(prominence_start, prominence_stop,prominence_step),np.arange(distance_start, distance_stop,distance_step))]
+        perms = [item for item in itertools.product(np.arange(bin_width_start, bin_width_stop,bin_width_step),np.arange(prominence_start, prominence_stop,prominence_step),np.arange(distance_start, distance_stop,distance_step))] # all the possibile parameters permutations allowed by our parameters set above.
         
+        # progress bar below
         f = IntProgress(value=0,min=0,max=len(perms),step=1,description='Loading perms...',bar_style='info',layout={"width": "100%"})
         display(f)
         self.log('Multiprocessing does not support progress bars. Disregard it.',2)
-        args = []
+        args = []   # used to call multiprocessing's pool method. Creating a different call for every single permutation so as to test them all.
 
-
-        with Manager() as manager:
-            trials = manager.dict()
-            start = datetime.now()
+        with Manager() as manager:  # necessary for multicore multiprocessing variable handling
+            trials = manager.dict() # shared between different CPU cores. It slows everything down and can be made better.
+            start = datetime.now()  # stats
 
             for perm in perms:
-                args.append([perm, peaks_coords,min_peaks,trials,max_error])
+                args.append([perm, peaks_coords,min_peaks,trials,max_error])    # creating args array
 
-            pool = Pool()
-            pool.starmap(self.perm_run, args)
-            pool.close()
+            pool = Pool()   # creating processes
+            pool.starmap(self.perm_run, args)   # activating multiprocessing
+            pool.close()   # multiprocessing ends 
+
+            # now multiple processes will have addedd all to the "trials" dictionary which is ready to be analyzed. The dictionary is organized as { permutation : data } where "permutation" is of type (##,##,##) and data is a tuple (popt_list, perr_list). popt_list is a list of optimal parameters for each peak found in the historgram that came up after using those particular distance, bins and prominence specified in the associated dictionary key. Perr_list is a list of curve_fit errors for the same thing.
 
             for perm in trials.keys():
-                popt_list, perr_list = trials[perm]
-                last = perm
-                num_peaks = len(popt_list)
-                combined = float(np.sum(perr_list))/num_peaks
-                if not True in np.asarray(perr_list) > max_error:
-                    if num_peaks >= min_peaks: temp_errs.append(combined)
-                else: self.log('Not counting for too big err'+str(perr_list),4)
-                if True in np.asarray(temp_errs) < combined: continue
-                else:
-                    self.log(np.asarray(temp_errs) < combined,4)
-                    self.log(temp_errs,4)
-                    self.log(f'Combined/peaks {combined}',4)
-                    best = perm
-                done += 1
-                self.log(f'Skipped {skipped} of {done+skipped}',4)
+                popt_list, perr_list = trials[perm]     # unpacking
+                last = perm     # 
+                num_peaks = len(popt_list)              # number of peaks detected and deemed suitable by the software
+                combined = float(np.sum(perr_list))/num_peaks   # normalizing the error by the number of the peaks because we want the smallest error but also the highest possible number of peaks. This gives us the best combination of both since min_peaks is set we will not get too few peaks. This is part of the smart optimization of SmartGAT.
 
-            end = datetime.now()
-            self.log(f'Runtime: {float(np.mean((end-start).total_seconds())):.01f} seconds',1)
+                if not True in np.asarray(perr_list) > max_error:   # check if all the peaks are within the max error range
+                    if num_peaks >= min_peaks: temp_errs.append(combined)   # check that we have enough peaks and if so append the combined error/peaks value to a temporary array for further evaluation.
+                else: self.log('Not counting for too big err'+str(perr_list),4)
+
+                if True in np.asarray(temp_errs) < combined: continue   # if tthere are already "combined" values (from other permutations) in the temporary array smaller than the current one it makes no sense to keep analyzing it because we already have something better.
+                else:
+                    self.log(np.asarray(temp_errs) < combined,4)    # logging
+                    self.log(temp_errs,4)                           # logging
+                    self.log(f'Combined/peaks {combined}',4)        # logging
+                    best = perm                                     # the best so far
+
+                done += 1   # stats
+
+            self.log(f'Skipped {skipped} of {done+skipped}',4)  # stats
+
+            end = datetime.now()    # stats
+            self.log(f'Runtime: {float(np.mean((end-start).total_seconds())):.01f} seconds',1)  # stats
             """ for p in perms:
                 start = datetime.now()
                 f.value += 1
@@ -793,16 +938,18 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
                 if len(diffs) == 5: self.notify('Initated gain calc.',f'ETC: {float(np.mean(diffs)*(len(perms)-f.value)/60):.01f} minutes',1) """
 
 
-            if not best is None: 
+            if not best is None: # a best fit was found for the parameters in the best variable stored as (bin width, prominence, distance). 
                 self.log(f'Best found at prominence {best[1]}, distance {best[2]}, bin width {best[0]} for {len(trials)} trials',1)
 
-            else:
+            else:   # the bounds set above are too narrow or the data is too diverse to find a best fit
                 self.log('Fatal error: could not load any peaks!',3)
                 return (False,False)
 
-            return self.__get_peaks(peaks_coords,*best,min_peaks,plot=True, is_best=True)
+            return self.__get_peaks(peaks_coords,*best,min_peaks,plot=True, is_best=True)   # return the popt_list and perr_list for the optimal parameters so the optimal list of optimal peak parameters and their errors (to display for the user)
     
     def perm_run(self, perm, peaks_coords, min_peaks,trials, max_error):
+        """ running a permutation to see if the historgram made with these parameters is good or not. Unless it fails, it adds to the trials dictionary for later analysis of best fit. """
+
         popt_list,perr_list = self.__get_peaks(peaks_coords,perm[0],perm[1],perm[2],peaks_min=min_peaks,plot=False)
         if False in perr_list or np.inf in perr_list: pass#skipped += 1
         else:
@@ -822,14 +969,16 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             self.log(f'Skipped {skipped} of {done+skipped}',4) """            
 
     def __find_best_MCA(self, file, min_peaks, min_bin, max_bin, min_prominence, max_prominence, min_distance, max_distance):
+        """ the same sa the find_best above but for MCA data """
+
         fits, errs = [], []
-        x, y = self.waveforms[file]
-        x = x[500:]
-        y = y[500:]
+        x, y = self.waveforms[file] # take MCA data
+        x = x[500:] # there is nothing interesting 0:500. I know because I looked at tons of files
+        y = y[500:] # there is nothing interesting 0:500. I know because I looked at tons of files
 
         bin_start = min_bin
         bin_stop = max_bin
-        bin_step = 1 #  DO NOT SET THIS TO FLOAT VALUES --> REBIN ONLY TAKES INTS AND CONVERTS TO INT ANYWAY!!!!!!
+        bin_step = 1 # NOTE DO NOT SET THIS TO FLOAT VALUES --> REBIN ONLY TAKES INTS AND CONVERTS TO INT ANYWAY!!!!!!
         bins = np.arange(bin_start,bin_stop, bin_step)
 
         prominence_start = min_prominence
@@ -853,7 +1002,9 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         done = 0
 
         perms = [item for item in itertools.product(np.arange(bin_start, bin_stop,bin_step),np.arange(prominence_start, prominence_stop,prominence_step),np.arange(distance_start, distance_stop,distance_step))]
+        
         self.log(f'Best fit for {file} using {len(perms)} permutations.', 4)
+        
         f = IntProgress(value=0,min=0,max=len(perms),step=1,description='Loading MCA perms...',bar_style='info',layout={"width": "100%"})
         display(f)
         self.log('Multiprocessing does not support progress bars. Disregard it.',2)
@@ -905,31 +1056,38 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
                 return None
 
             #self.__mca_fit_peaks2(min_peaks,best[0],x,y,prominence=best[1],distance=best[2],plot=True)
-            return best
+            return best # returns the optimal permutation
 
     def perm_run_MCA_2(self, perm, x,y, min_peaks, max_error, trials):
+        """ same as perm_run but for MCA data and v2.0 """
+
         x, y = self.rebin(x,y,perm[0])
         peaks,pdict = find_peaks(y,prominence=perm[1],distance=perm[2])
         
-        if len(peaks) == 0: return False
-        if len(peaks) >= min_peaks:
+        if len(peaks) == 0: return False  
+        if len(peaks) >= min_peaks:     # we have enough peaks
+            # now it is time to fit these peaks individually with gaussians. Finding them was not enough like it was for raw data. NOTE More on this in the documentation.
+
             perrs, pks = self.gauss_peaks_MCA(peaks,pdict,x,y,max_error,plot=False)
-            if perrs is False: return False
-            if not True in (np.asarray(perrs) > max_error) and len(pks) >= min_peaks:
-               trials[perm] = (pks,perrs)
+            if perrs is False: return False # unable to fit them properly
+            if not True in (np.asarray(perrs) > max_error) and len(pks) >= min_peaks:   # enough peaks fitted and all with an acceptable error
+               trials[perm] = (pks,perrs)   # adds to the trials dictionary for later best fit eval.
                return pks
             
  
     def gauss_peaks_MCA(self,peaks,pdict,x,y,max_error,plot=False):
-        
+        """ fitting all the peaks from MCA data. More on this in the documentation provided with this code. """
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
+        """ ONLY comments necessary to understand this code will be made by me. The rest was copied. """
+
         err_temp = []
         gain_temp = []
         
         fit_peak_x = x[peaks[0]]
         fit_peak_amp = y[peaks[0]]
-        x_idx_array=(y<0.5*fit_peak_amp) & (x>fit_peak_x)# returns a boolean array where both conditions are true
+        x_idx_array=(y<0.5*fit_peak_amp) & (x>fit_peak_x)   # returns a boolean array where both conditions are true
         right_side_x= x[np.where(x_idx_array)[0][0]] #finding the first time where x_idx_array is True
-        sigma_guess=np.abs(fit_peak_x-right_side_x) #We need this to fit the width of the Gaussian peaks
+        sigma_guess=np.abs(fit_peak_x-right_side_x) # We need this to fit the width of the Gaussian peaks
 
         cut= (x < fit_peak_x+sigma_guess) & (x > fit_peak_x-sigma_guess)
         try: popt,pcov=curve_fit(self.gauss,x[cut],y[cut],p0=[fit_peak_amp,fit_peak_x,sigma_guess],maxfev=1000000)
@@ -967,6 +1125,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         
 
     def perm_run_MCA(self, perm, x,y, min_peaks, max_error, trials):
+        """ DEPRECATED """
 
         #x,y = self.rebin(x,y, perm[0]) #1 (prom) 2(dist)
         try:
@@ -992,8 +1151,8 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
                 distances.append(np.abs(sorted_peaks[i]-sorted_peaks[i-1]))
             trials[perm] = (peaks, err_list)
 
-
-    def __peak_filter(self, peaks_coords): #TODO CHECK THAT PEAK IS EXTRACTED FROM FUNCTIONA AND NOT ARG_MAX!!!
+    def __peak_filter(self, peaks_coords): #TODO CHECK THAT PEAK IS EXTRACTED FROM FUNCTION AND NOT ARG_MAX!!!
+        """ get just pulse peaks that are aligned. This is now obsolete. It DOES NOT have to do with MCA """
         temp = []
         avg = 0
         for wvf_tuple in peaks_coords:
@@ -1005,8 +1164,8 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         self.log(f'Average peak mu is {avg/len(peaks_coords)} for {avg} and {len(peaks_coords)}',2)
         return temp
 
-
     def __get_peaks(self, peaks_filtered, bin_width, prominence, distance, peaks_min,max_bins=1000,plot=False,is_best=False):
+        """ DEPRECATED """
 
         y_data = np.asarray([])
         x_data = np.asarray([])
@@ -1086,14 +1245,14 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         if is_best: self.peaks_final_perr = peaks_final_perr
         return (gauss_fits_temp, gauss_err_temp)
 
-    def _plot_hist(self):
+    def _plot_hist(self):   # just plotting
         mpl.rcParams['figure.dpi']= 200
         plt.bar(*self.hist_data,color='royalblue',width=self.hist_params[0])
         plt.xlabel('peak amplitude [mV]')
         plt.ylabel('peaks [counts]')
         #plt.xlim(0,1000)
 
-    def _plot_hist_fit(self):
+    def _plot_hist_fit(self):   # just more plotting
         for val in self.hist_fit_params:
             params, xy_tuple = val
             popt, perr = params
@@ -1106,7 +1265,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             plt.vlines([real_x],0,real_y,linestyles="--",colors=['lime'],linewidths=1)
             plt.scatter([real_x],[real_y],50,color='green',marker='+')
 
-    def _plot_gain(self):
+    def _plot_gain(self):   # even more plotting
         data = []
         errs = []
         for (peak,err) in zip(self.peaks_final[1], self.peaks_final_perr):
@@ -1118,7 +1277,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         popt, perr = self.gain_fit_params
         plt.plot(np.arange(1,len(data)+1,1),self.line(np.arange(1,len(data)+1,1),*popt),color='black',ls="--",alpha=0.8)
         
-    def plot(self, hist=False,hist_fit=False, gain=False):
+    def plot(self, hist=False,hist_fit=False, gain=False):  # anyone said plotting?
         if self.error: self.__throw_error()
         plt.clf()
         mpl.rcParams['figure.dpi']= 200
@@ -1145,13 +1304,15 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
 
         plt.show()
             
-    def gauss(self,x,a,mu,sigma): return (a*np.exp(-0.5*((x-mu)/sigma)**2))
+    def gauss(self,x,a,mu,sigma): return (a*np.exp(-0.5*((x-mu)/sigma)**2))     # gaussian function
 
-    def line(self,x,m,c): return (m*x)+c
+    def line(self,x,m,c): return (m*x)+c    # line function
 
-    def line_mca(self,x,a,b): return a*(x-b)
+    def line_mca(self,x,a,b): return a*(x-b)    # line function for MCA
 
     def rebin(self,hx,h,bins):
+        """ DISCLAIMER: part or all of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
+
         bins = int(bins)
         h_rebin=[]
         for i in range(int(len(h)/bins)):
@@ -1162,6 +1323,8 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return np.array(hx_rebin), np.array(h_rebin)
 
     def rebin_center(self,hx,h,bins):
+        """ DISCLAIMER: part or all of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
+
         h_rebin=[]
         hx_rebin=[]
         for i in range(int(len(h)/bins)):
@@ -1173,18 +1336,19 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return np.array(hx_rebin), np.array(h_rebin)
 
     def __mca_fit_peaks2(self,min_peaks,total_bins, x,y, prominence=None, distance=None, plot=True):
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
 
         x,y = self.rebin(x,y, total_bins)
         gain_temp=[]#reset the gain temp list here to store gain values for one file
         err_temp = []
 
         PROMINENCE = 1E3
-        DISTANCE = 80/total_bins
+        DISTANCE = 80/total_bins    # introduced to estimate a distance and save processing power! So set the distance to none and let this estimate it. You can try but sometimes it won't work. It depends on the time of acquisition too. NOTE change this as you wish.
         if not prominence is None: PROMINENCE= prominence 
         if not distance is None: DISTANCE=distance
 
         peaks,pdict=find_peaks(y,prominence=PROMINENCE,distance=DISTANCE)
-        if len(peaks) < min_peaks: return False,False
+        if len(peaks) < min_peaks: return False,False   # these parameters will not get us enough peaks
             
         #To avoid fitting the pedestal, we ignore the first peak. In case the pedestal isn't there, then first peak gets ignored. This shouldn't change gain or BV calculation
         first_pe_max=x[peaks[0]] # The x-value of the 3rd peak.Index=1 means the second peak will be used for getting fit parameters
@@ -1228,6 +1392,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return (err_temp, peaks)
 
     def __mca_fit_peaks(self,min_peaks,total_bins, file, prominence=None, distance=None):
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
         print(f'MCA data from {file}')
 
         gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
@@ -1243,7 +1408,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         gain_temp=[]#reset the gain temp list here to store gain values for one file
         #Use scipy find_peaks to find peaks starting with a very high prominence 
         PROMINENCE = 1E3
-        DISTANCE = 80/total_bins
+        DISTANCE = 80/total_bins    # this was introduced 
         if not prominence is None: PROMINENCE = prominence 
         if not distance is None: DISTANCE =distance
 
@@ -1296,6 +1461,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return (gain_temp,x,y, weird, peaks)
 
     def __mca_gain(self,vals, weird, total_bins, peaks, multiplication=None): #TODO understand why Y and total_bins are important here
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
 
         if not multiplication is None: vals = np.asarray(vals)*multiplication
         plt.subplot(1,3,2) #This subplot shows the straight line fit to the peak means to obtain the slope/gain
@@ -1336,6 +1502,8 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return (calib_pe, calib_count)
 
     def __mca_eval_gain(self,total_bins,min_peaks, best=False, min_bin=None, max_bin=None, min_prominence=None, max_prominence=None, min_distance=None, max_distance=None):
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
+
         if total_bins is None: raise(ArgumentError('Specify a number as the total number of bins flag for gat.eval_gain method!'))
 
         print(f'MCA data -> peaks: {min_peaks}, bins: {total_bins}')
@@ -1468,6 +1636,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         self.mca_gain_eval = (np.array(calib_pe),np.array(calib_count),np.array(gain_list),np.array(gain_err))
 
     def mca_gain_corrected(self):
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
         for x,y,z,r in zip(*self.mca_gain_eval): #z,r are useless and nothing but necessary to unpack with the star
             plt.figure(figsize=(12,2))
             plt.subplot(1,3,1)
@@ -1548,6 +1717,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             #self.other()
 
     def other(self,data):
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
         NO_FIELD_calib_pe,NO_FIELD_calib_count,NO_FIELD_gain_list,NO_FIELD_gain_err = data
         plt.figure(figsize=(6,4))
 
@@ -1564,6 +1734,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         plt.show()
 
     def gain_calculator(self,PATH,N_BINS,N_PEAKS):
+        """ DISCLAIMER: part of this code was written and invented by Dr. Avinay Bhat to whom I am very thankful. """
         BINS=N_BINS #Number of bins to rebin the MCA data with
         N_peaks= N_PEAKS# Number o peaks to use for calculating the gain
         gain_list=[] #empty list to fill in the values of gain, returned at the end of this function
@@ -1662,6 +1833,7 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return(np.array(calib_pe),np.array(calib_count),np.array(gain_list),np.array(gain_err))
 
     def log(self, message, level, notify=0):
+        """ Logging class. please refrain from using print statements in the code. """
         curframe = inspect.currentframe()
         calframe = inspect.getouterframes(curframe, 2)
 
@@ -1683,10 +1855,12 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
         return True
 
     def update(self, etc,task):
+        """ This would update a website in real time from which I could check how the code was running while away from my desk. """
         try: requests.get('http://tizianobuzz.pythonanywhere.com/logger/update/'+str(etc)+'/'+str(task))
         except Exception: pass
 
     def notify(self,title,message,priority,users=['Tiziano']):
+        """ This code is able to send push notifications to my phone to notify me of the execution of the code. """
         if not self.notifications: return False
         accounts = {'Tiziano': "hwr043mln2xft1y"}
         url = "https://alertzy.app/send"
@@ -1696,3 +1870,4 @@ class SmartGAT:  #   GAT: Gain Analysis Tool
             except: status = False
             else: requests.post(url, data=params)
         return status
+
