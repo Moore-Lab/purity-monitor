@@ -18,7 +18,7 @@ class SensorData:
         self.Index = np.arange(0,22,1)
         self.PlotTime = PlotTime
         self.StartTime = datetime.datetime.now()
-        self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy1', 'dummy1', 'Time']
+        self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy', 'dummy', 'dummy','Compressor', 'Inlet', 'Outlet', 'dummy', 'dummy', 'dummy', 'Time']
         
     def GetData(self, Selection=None):
         self.File = h5py.File(self.Filepath, 'r')
@@ -49,8 +49,8 @@ class SensorData:
         SPressure = tuple([np.array(Sensor.ReturnData('System Pressure')) for Sensor in Sensors])
         self.SPressure = np.concatenate(SPressure,axis=1)
 
-        # Compressor = tuple([np.array(Sensor.ReturnData('Compressor')) for Sensor in Sensors])
-        # self.Compressor = np.concatenate(Compressor,axis=1)
+        Compressor = tuple([np.array(Sensor.ReturnData('Compressor')) for Sensor in Sensors])
+        self.Compressor = np.concatenate(Compressor,axis=1)
 
         self.Time = np.concatenate(tuple([Sensor.Time for Sensor in Sensors]), axis=0)
     
@@ -78,7 +78,7 @@ class SensorData:
             Tags = self.Labels[0:2]
             Data = [self.Data[x] for x in Tags]
         elif Selection == 'Compressor': 
-            Tags = self.Labels[16:21]
+            Tags = self.Labels[16:19]
             Data = [self.Data[x] for x in Tags]
         return Data
 
@@ -97,9 +97,9 @@ class SensorData:
             # Data = [self.Data[x] for x in Tags]
         elif Selection == 'Compressor': 
             XYLabels = ['Time [hh:mm]', 'Temperature [C]']
-            Tags = self.Labels[16:21]
+            Tags = self.Labels[16:19]
 
-        fig = plt.figure()
+        fig = plt.figure(figsize=(20,5))
         ax = fig.gca()
         if(YRange[0]!=1 or YRange[1]!=1):
             plt.ylim(YRange[0], YRange[1])
@@ -122,7 +122,7 @@ class SensorData:
 
         for ii,(X,Tag) in enumerate(zip(Data,Tags)):
             plt.plot(self.Time[::Bin], X[::Bin], label=Tag, linewidth=2, color=colors[ii])
-        plt.legend(loc='upper left')
+        plt.legend(loc='best')
 
         if(XRange != 0):
             xlim1 = XRange[0]
@@ -132,3 +132,5 @@ class SensorData:
             xlim2 = self.DateTime + datetime.timedelta(seconds=3600*24)
             # xlim2 = self.Time[-1]
         plt.xlim(xlim1, xlim2)
+        plt.savefig('StandStatus.pdf')
+        plt.show()

@@ -779,3 +779,46 @@ class AFG2225(VisaUsbInstrument):
         else:
             command = "SOURCE{0}:FREQ:COUP:MODE Off".format(channel)
             self.write(command)
+
+    # def get_frequency(self, channel):
+    #     """ Returns the channel's current frequency in Hz
+    #     :param channel: The channel to query
+    #     :type channel: int
+    #     :return: The channel's current frequency
+    #     :rtpye: float
+    #     """
+    #     # Check channel
+    #     channel = self._check_channel(channel)
+    #     # Return
+    #     return float(self.query("SOURCE{0}:FREQUENCY?".format(channel)))
+
+    # def set_burst(self,channel,state='OFF'):
+
+    #     """ Check whether the burst mode is ON or OFF
+    #     """
+    #     channel = self._check_channel(channel)
+    #     # print(channel)
+    #     command="SOURCE{0}:BURST:STATE {fname}".format(channel,fname=state)
+    #     self.write(command)
+    #     return self.query("SOURCE{0}:BURST:STATE?".format(channel))
+
+
+    def set_burst(self,channel,state='OFF',mode='TRIG',ncycles='INF',period=1):
+
+        """ Check whether the burst mode is ON or OFF
+        """
+        channel = self._check_channel(channel)
+        # print(channel)
+        command="SOURCE{0}:BURST:STATE {fname}".format(channel,fname=state)
+        self.write(command)
+        # return self.query("SOURCE{0}:BURST:STATE?".format(channel)) 
+        # if state=='ON':
+        command='SOURCE{0}:BURST:MODE {fname}'.format(channel,fname=mode)
+        self.write(command)
+        command='SOURCE{0}:BURST:NCYCLES {fname}'.format(channel,fname=ncycles)
+        self.write(command)
+        command='SOURCE{0}:BURST:INTERNAL:PERIOD {0}'.format(channel,period)
+        # command='SOUR1:BURS:INT:PER +1.0000E+01'
+        self.write(command)            
+
+
