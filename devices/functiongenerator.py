@@ -212,6 +212,21 @@ class AFG2225(VisaUsbInstrument):
                                     transform=float)
         return in_range and out
 
+    def set_pulse_width(self, channel, width):
+        """ Sets the pulses width
+            width in ns
+        """
+
+        # Build commands
+        command = "SOURCE{0}:PULSE:WIDTH {1}E-09".format(channel, width)
+        query = "SOURCE{0}:PULSE:WIDTH?".format(channel)
+        result = width*1e-9
+        out =  self._set_with_check(command=command,
+                                    query=query,
+                                    result=result,
+                                    transform=float)
+        return out
+
     def get_frequency(self, channel):
         """ Returns the channel's current frequency in Hz
         :param channel: The channel to query
