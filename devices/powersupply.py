@@ -2,7 +2,7 @@ from RsInstrument import *
 
 class NGE100:
     def __init__(self, address='USB0::0x0AAD::0x0197::5601.1414k03-100771::INSTR'):
-        RsInstrument.assert_minimum_version('1.21.0.78')
+        #RsInstrument.assert_minimum_version('1.21.0.78')
         self.inst = RsInstrument(address, True, True, "SelectVisa='rs',")
 
     def voltage(self, ch, volt):
