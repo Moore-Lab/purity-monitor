@@ -70,7 +70,7 @@ class mca (object):
         self.command(5,1,0)
 
     def setup_mca(self, chan=0, dec=4, negative=False, baseline_mode='none', baseline_level=0,
-                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0, integ_time=100, delay=100 ):
+                        min_thresh=0, max_thresh=16380, trig_source=0, trig_slope=0, integ_time=100, delay=100):
         
         ## set decimation factor
         self.command(4,0,dec)
@@ -110,6 +110,7 @@ class mca (object):
         ## trigger
         #self.command(15, trig_source, 0) 
         #self.command(16, trig_source, trig_slope)
+
 
     def read_timer(self, chan=0):
         self.command(13, chan)
