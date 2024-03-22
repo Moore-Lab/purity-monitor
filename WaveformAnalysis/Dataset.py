@@ -54,7 +54,11 @@ class Dataset:
                 # print(f.attrs['Date'])
                 # print(Group.get(key).attrs["TimeStamp"].decode('utf-8'))
                 if "timestamp" in var:
-                    ch.TimeStamp.append(datetime.datetime.strptime(Group.get(key).attrs["TimeStamp"].decode('utf-8'), '%Y%m%d%H%M%S'))
+                    try:
+                        ch.TimeStamp.append(datetime.datetime.strptime(Group.get(key).attrs["TimeStamp"].decode('utf-8'), '%Y%m%d%H%M%S'))
+                    except AttributeError:
+                        ## catch error happening on Macs
+                        ch.TimeStamp.append(datetime.datetime.strptime(Group.get(key).attrs["TimeStamp"], '%Y%m%d%H%M%S'))
         f.close()
             
 
