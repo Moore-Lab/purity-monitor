@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 import PlotFunctions as Plt
 import Waveform as Wvf
+from scipy.optimize import curve_fit
 
 class Dataset: 
     def __init__(self,  Path, ShowPlots=True, Selection='*', Pol=1, NumChannels=2):
@@ -226,5 +227,23 @@ class Dataset:
         else:
             return np.interp(Efield, r_const_mol[:,0], r_const_mol[:,1]) * mol_to_ppb
         
-        
+    def LifetimeFunction(t, alpha, c0, Gamma, k, drift_time):
+        ##  Ratio of anode/cathode amplitudes vs time
+        ## alpha is overall normalization (should be close to 1)  
+        ## c0 is the initial concentration of O2 in ppb
+        ## Gamma is the outgassing rate in ppb/s
+        ## k is the attachment rate constant in (ppb * s)^-1
 
+        return alpha * np.exp(-drift_time*(k*(c0 + Gamma*t)))
+
+    def FitOutgassingRate(self, time, amp_ratio, errs, Efield, drift_time):
+        ## fit the ratio of anode/cathode amplitudes vs time to determine
+        ## the outgassing rate of the chamber
+        ##
+        ## Efield is the electric field in V/cm
+
+        k = GetO2RateConstant(Efield)
+        ffn = lambda t, alpha, c0, Gamma: LifetimeFunction(t, alpha, c0, Gamma, k, drift_time)
+        popt, pcov = curve_fit(ffn, time, amp_ratio, p0=[1, 0, 0], sigma=errs)
+
+        return popt, pcov
