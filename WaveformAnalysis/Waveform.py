@@ -197,10 +197,14 @@ class Waveform:
             ReconAmpFit[bad_pts] = np.nan
         self.ReconAmpFit = ReconAmpFit * np.max(template)
 
-    def ReconstructFiltAmplitude(self, FiltData):
+    def ReconstructFiltAmplitude(self, FiltData, removeOutliers=True):
         ReconAmpFilt = []
         for d in FiltData:
             ReconAmpFilt.append( np.max(d) )
+        ReconAmpFilt = np.array(ReconAmpFilt)
+        if removeOutliers:
+            bad_pts = (ReconAmpFilt - np.median(ReconAmpFilt)) > 3*np.std(ReconAmpFilt - np.median(ReconAmpFilt))
+            ReconAmpFilt[bad_pts] = np.nan
         self.ReconAmpFilt = np.array(ReconAmpFilt)
 
     def RemoveNoiseSingle(self, data, LowCut, HighCut, Order):
