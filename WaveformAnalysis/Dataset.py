@@ -192,3 +192,39 @@ class Dataset:
 
     def RoundDownToNext(self, Num, Floor): 
         return int(np.floor(Num / float(Floor))) * float(Floor)
+
+    def GetO2RateConstant(self, Efield):
+        ## Return the attachment rate constant for O2
+        ## from Bakale et al, Effect of an electric field on electron attachment to sulfur hexafluoride, 
+        ## nitrous oxide, and molecular oxygen in liquid argon and xenon
+        ## J. Phys. Chem. 1976, 80, 23, 2556–2559, 1976
+        ## https://pubs.acs.org/doi/10.1021/j100564a006
+
+        ## Efield in V/cm
+        ## Rate constant in (ppb * s)^-1
+
+        ## rate constant in molar units
+        r_const_mol = [[47.86915794804533, 167436205146.0036],
+                    [82.1801794154097, 159561779203.71045],
+                    [134.34205719730778, 141458033071.3652],
+                    [219.61242309749164, 125408322846.992],
+                    [317.5344099668222, 108533761190.10464],
+                    [470.51019447195546, 96219611340.56091],
+                    [697.2554390595119, 81290883003.81757],
+                    [1197.4555858841563, 65448482532.32767],
+                    [1864.253132256288, 50215387696.18516],
+                    [2902.2046490671305, 39467017624.8802],
+                    [4518.051588237296, 31019286152.418293],
+                    [6533.927894963977, 24379752292.17836],
+                    [8564.188003206595, 20107000111.585224]]
+        r_const_mol = np.array(r_const_mol)
+        mol_to_ppb = 2.4e-8
+
+        if(Efield < r_const_mol[0,0] or Efield > r_const_mol[-1,0]):
+            print("Efield out of range")
+            return np.nan
+        else:
+            return np.interp(Efield, r_const_mol[:,0], r_const_mol[:,1]) * mol_to_ppb
+        
+        
+

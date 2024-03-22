@@ -28,6 +28,8 @@ class Waveform:
         self.Trigger = []
         # self.Max = []
         self.MaxT = []
+        self.ReconAmpFit = []
+        self.ReconAmpFilt = []
         self.AmpFFT = []
         self.TimeFFT = []
         self.VScale = self.Scale(units=VScale)
@@ -165,6 +167,41 @@ class Waveform:
         sos = self.butter_bandpass(lowcut, highcut, fs, order=order)
         y = sosfilter(sos, data)
         return y
+
+    def FilterWaveforms(self, Data, LowCut, HighCut, scale_fac=200, window='hann'):
+        b, a = scipy.signal.butter(3, [LowCut, HighCut], btype="bandpass", fs=self.Sampling)
+        DataOut = []
+        if(window):
+            window = scipy.signal.get_window(window, len(Data[0]))
+        else:
+            window = np.ones(len(Data[0]))
+        for d in Data:
+            DataOut.append(scale_fac*scipy.signal.filtfilt(b, a, np.gradient(d)*window))
+        return DataOut    
+
+    def MakeTemplate(self, Data):
+        TemplateOut = np.zeros_like(Data[0])
+        nwfm = 0   
+        for d in Data:
+            TemplateOut += d
+            nwfm += 1
+        return TemplateOut/nwfm   
+
+    def ReconstructFitAmplitude(self, Data, template, removeOutliers=True):
+        ReconAmpFit = []
+        for d in Data:
+            ReconAmpFit.append( np.sum(d*template)/np.sum(template**2) )
+        ReconAmpFit = np.array(ReconAmpFit)
+        if removeOutliers:
+            bad_pts = (ReconAmpFit - np.median(ReconAmpFit)) > 3*np.std(ReconAmpFit - np.median(ReconAmpFit))
+            ReconAmpFit[bad_pts] = np.nan
+        self.ReconAmpFit = ReconAmpFit * np.max(template)
+
+    def ReconstructFiltAmplitude(self, FiltData):
+        ReconAmpFilt = []
+        for d in FiltData:
+            ReconAmpFilt.append( np.max(d) )
+        self.ReconAmpFilt = np.array(ReconAmpFilt)
 
     def RemoveNoiseSingle(self, data, LowCut, HighCut, Order):
         return self.butter_bandpass_filter(data, LowCut, HighCut, self.Sampling, Order).tolist()
