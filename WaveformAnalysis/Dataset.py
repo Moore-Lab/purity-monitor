@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 import PlotFunctions as Plt
 import Waveform as Wvf
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize
 
 class Dataset: 
     def __init__(self,  Path, ShowPlots=True, Selection='*', Pol=1, NumChannels=2):
@@ -202,7 +202,7 @@ class Dataset:
         ## https://pubs.acs.org/doi/10.1021/j100564a006
 
         ## Efield in V/cm
-        ## Rate constant in (ppb * s)^-1
+        ## Rate constant in (mbar * s)^-1 (mbar at STP)
 
         ## rate constant in molar units
         r_const_mol = [ [47.86915794804533, 167436205146.0036],
@@ -219,31 +219,81 @@ class Dataset:
                         [6533.927894963977, 24379752292.17836],
                         [8564.188003206595, 20107000111.585224] ]
         r_const_mol = np.array(r_const_mol)
-        mol_to_ppb = 2.4e-8
+        #mol_to_ppb = 2.4e-8
+        mol_to_mbar = 4.4e-5
 
         if(Efield < r_const_mol[0,0] or Efield > r_const_mol[-1,0]):
             print("Efield out of range")
             return np.nan
         else:
-            return np.interp(Efield, r_const_mol[:,0], r_const_mol[:,1]) * mol_to_ppb
+            return np.interp(Efield, r_const_mol[:,0], r_const_mol[:,1]) * mol_to_mbar
         
-    def LifetimeFunction(t, alpha, c0, Gamma, k, drift_time):
+    def LifetimeFunction(self, t, alpha, c0, Gamma, k, drift_time, volume):
         ##  Ratio of anode/cathode amplitudes vs time
         ## alpha is overall normalization (should be close to 1)  
-        ## c0 is the initial concentration of O2 in ppb
-        ## Gamma is the outgassing rate in ppb/s
-        ## k is the attachment rate constant in (ppb * s)^-1
+        ## c0 is the initial concentration of O2 
+        ## Gamma is the outgassing rate in mbar*L/s
+        ## k is the attachment rate constant in (mbar * s)^-1
+        ## volume is the LXe volume in liters
 
-        return alpha * np.exp(-drift_time*(k*(c0 + Gamma*t)))
+        return alpha * np.exp(-drift_time*(k*(c0 + Gamma/volume*t)))
 
-    def FitOutgassingRate(self, time, amp_ratio, errs, Efield, drift_time):
+    def LogLifetimeFunction(self, t, alpha, c0, Gamma, k, drift_time, volume):
+        ##  Ratio of anode/cathode amplitudes vs time (Log for fitting)
+        ## alpha is overall normalization (should be close to 1)  
+        ## c0 is the initial concentration of O2 
+        ## Gamma is the outgassing rate in mbar*L/s
+        ## k is the attachment rate constant in (mbar * s)^-1
+        ## volume is the LXe volume in liters
+
+        if(alpha < 1e-2):
+            alpha=1e-2 ## avoid negative values
+
+        return np.log(alpha) - drift_time*(k*(c0 + Gamma/volume*t))
+
+    def FitOutgassingRate(self, time, amp_ratio, errs, Efield, drift_time, profile_vals=[], 
+                          tvals=[], alpha_mu=1, alpha_err=0.02, volume=0.4):
         ## fit the ratio of anode/cathode amplitudes vs time to determine
         ## the outgassing rate of the chamber
         ##
-        ## Efield is the electric field in V/cm
+        ## Efield is the electric field in V/cm 
+        ## alpha_mu, alpha_err are the mean and error on the overall normalization, used in the profiling as a constraint
+        ## time is in hours
+        ## volume is LXe volume in liters
 
-        k = GetO2RateConstant(Efield)
-        ffn = lambda t, alpha, c0, Gamma: LifetimeFunction(t, alpha, c0, Gamma, k, drift_time)
-        popt, pcov = curve_fit(ffn, time, amp_ratio, p0=[1, 0, 0], sigma=errs)
+        k = self.GetO2RateConstant(Efield)
 
-        return popt, pcov
+        ffn = lambda t, alpha, c0, Gamma: self.LifetimeFunction(t, alpha, c0, Gamma, k, drift_time, volume) 
+        logffn = lambda t, alpha, c0, Gamma: self.LogLifetimeFunction(t, alpha, c0, Gamma, k, drift_time, volume) 
+        
+        popt, pcov = curve_fit(logffn, time, np.log(amp_ratio), p0=[1, 0, 0], sigma=errs)
+
+        if(len(tvals) == 0):
+            tvals = 1.0*time
+
+        profile_out = []
+        if(len(profile_vals) > 0):
+
+            logffn = lambda t, alpha, c0, Gamma: self.LogLifetimeFunction(t, alpha, c0, Gamma, k, drift_time, volume) 
+
+            ## min and max range for plotting error band
+            min_fit = ffn(tvals, *popt)
+            max_fit = ffn(tvals, *popt)
+            for pv in profile_vals:
+
+                ## negative log likelihood to minimize over alpha and c0, with constraint above
+                nll = lambda p: np.sum( (np.log(amp_ratio) - logffn(time, p[0], p[1], pv))**2 / (2*errs**2) ) + (p[0] - alpha_mu)**2/(2*alpha_err**2)
+
+                ## minimize the negative log likelihood 
+                res = minimize(nll, [alpha_mu, 0], method='Nelder-Mead')
+                profile_out.append([pv, res.fun, res.x[0], res.x[1], res.success])
+                if(not res.success): continue
+
+                curr_fit = ffn(tvals, res.x[0], res.x[1], pv)
+                min_fit = np.min(np.vstack((min_fit, curr_fit)), axis=0)
+                max_fit = np.max(np.vstack((max_fit, curr_fit)), axis=0)
+
+            profile_out = np.array(profile_out)
+            profile_out[:,1] -= np.min(profile_out[:,1])
+
+        return popt, pcov, profile_out, min_fit, max_fit
