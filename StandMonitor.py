@@ -19,8 +19,9 @@ class SensorData:
         self.PlotTime = PlotTime
         self.StartTime = datetime.datetime.now()
         self.Labels = ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2', 'LN Dewar 1', 'LN Dewar 2', 'Xenon Pump', 'Flow Meter', 'Back Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', 'dummy', 'dummy', 'dummy','Compressor', 'Inlet', 'Outlet', 'dummy', 'dummy', 'dummy', 'Time']
+        # ['Gas System', 'Chamber', 'Stainless-steel Cylinder 1 (R)', 'Stainless-steel Cylinder 2 (L)', 'LN Dewar 1 (R)', 'LN Dewar 2 (L)', 'Flow Meter', '?', 'Circulation Pump', 'Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom', '?', '?', '?','Compressor', 'Inlet', 'Outlet', 'dummy', 'dummy', 'dummy', '?']
         
-    def GetData(self, Selection=None):
+    def GetData(self, Selection=None, Return=None):
         self.File = h5py.File(self.Filepath, 'r')
         self.Key = list(self.File.keys())[0]
         self.RawData = np.array(self.File[self.Key])
@@ -31,13 +32,29 @@ class SensorData:
             for ii,Label in enumerate(self.Labels):
                 if Label == 'Time':
                     self.Seconds = [(x - self.RefTime - 14400 - 3600) for x in self.RawData[:,15]]
-                    self.Time = [self.DateTime + datetime.timedelta(seconds=x) for x in self.Seconds]
+                    self.Time = np.asarray([self.DateTime + datetime.timedelta(seconds=x) for x in self.Seconds])
                 else:
                     self.Data[Label] = self.RawData[:,self.Index[ii]]
         else: 
             SelectionIndex = np.where(self.Labels == Selection)[0][0]
             self.Data[Selection] = self.RawData[:,self.Index[SelectionIndex]]
         self.File.close()
+
+        if Return is not None:
+            self.Data['Time'] = self.Time
+            return self.Data
+    
+    def GetColdData(self):
+        '''Returning the files that have recorded data when the compressor is on'''
+        Compressor = self.Data['Compressor']
+        if (Compressor > 50).any(): # when compressor temperature is above 50 C
+            return self.Filepath
+
+    def GetXenonData(self):
+        '''Returning the files that have recorded data when the xenon is by the pressure reader'''
+        XenonPressure = np.concatenate((self.Data['Stainless-steel Cylinder 1'], self.Data['Stainless-steel Cylinder 2']))
+        if (XenonPressure > 300).any(): # when xenon pressure is above 300 PSI
+            return self.Filepath
 
     def Combine(self, Sensors): 
         Temp = tuple([np.array(Sensor.ReturnData('Temperature')) for Sensor in Sensors])
@@ -105,7 +122,7 @@ class SensorData:
             plt.ylim(YRange[0], YRange[1])
         
         ax.minorticks_on()
-        ax.xaxis.set_major_locator(matplotlib.dates.MinuteLocator(interval=XTicks))
+        ax.xaxis.set_major_locator(matplotlib.dates.MinuteLocator(interval=XTicks)) # number of minutes in between each x tick 
         ax.xaxis.set_minor_locator(matplotlib.ticker.AutoMinorLocator(5))
         ax.yaxis.set_major_locator(MultipleLocator(YTicks))
         ax.xaxis.set_minor_locator(matplotlib.ticker.AutoMinorLocator(5))
@@ -134,6 +151,94 @@ class SensorData:
         plt.xlim(xlim1, xlim2)
         plt.savefig('StandStatus.pdf')
         plt.show()
+
+    def MonitorData(self, Data, Selection, Time=None, XYLabels=None, Labels=None, Tags=None, XRange=0, YRange=[1,1], YTicks=[10, 10, 10], XTicks=2, Bin=1):
+        '''Plotting data over the span of a few months for the purpose of monitoring levels
+        Similar to Plot data, but assuming the x-axis is over months instead of a few hours'''
+        if Selection == 'Temperature': 
+            XYLabels = ['Time [yyyy-mm]', 'Temperature [C]']
+            Tags = self.Labels[9:13] # labels of the different temperature sensors ('Cold Head', 'Copper Ring', 'Copper Jacket', 'TPC Bottom')
+            # Data = [self.Data[x] for x in Tags]
+        elif Selection == 'Xenon Pressure': 
+            XYLabels = ['Time [yyyy-mm]', 'Pressure [PSIG]']
+            Tags = self.Labels[2:4] # labels of the two xenon cylinders ('Stainless-steel Cylinder 1', 'Stainless-steel Cylinder 2')
+            # Data = [self.Data[x] for x in Tags]
+        elif Selection == 'System Pressure':  
+            XYLabels = ['Time [yyyy-mm]', 'Pressure [PSIG]']
+            Tags = self.Labels[0:2] # labels of the two pressure sensors ('Gas System', 'Chamber')
+            # Data = [self.Data[x] for x in Tags]
+        elif Selection == 'Compressor': 
+            XYLabels = ['Time [yyyy-mm]', 'Temperature [C]']
+            Tags = self.Labels[16:19] # labels of the different temperatures ('Compressor', 'Inlet', 'Outlet')
+        
+        fig, axes = plt.subplots(1, len(Tags), figsize=(6*len(Tags), 5))
+        for ax, ytick in zip(axes, YTicks):
+            if(YRange[0]!=1 or YRange[1]!=1):
+                plt.ylim(YRange[0], YRange[1])
+            
+            ax.minorticks_on()
+            ax.xaxis.set_major_locator(matplotlib.dates.MonthLocator(interval=XTicks)) # number of months in between each x tick 
+            ax.xaxis.set_minor_locator(matplotlib.ticker.AutoMinorLocator(4))
+            ax.yaxis.set_major_locator(MultipleLocator(ytick))
+            ax.yaxis.set_minor_locator(matplotlib.ticker.AutoMinorLocator(2))
+
+            ax.grid(b=True, which='major', color='k', linestyle='--', alpha=0.8)
+            ax.grid(b=True, which='minor', color='grey', linestyle=':')
+
+            ax.set_xlabel(XYLabels[0])
+            ax.set_ylabel(XYLabels[1])
+
+            plt.gcf().autofmt_xdate()
+            formatter = DateFormatter('%Y-%m')
+            ax.xaxis.set_major_formatter(formatter)
+        
+        if Selection == 'Compressor': # selecting only the data points when the compressor is on
+            AverageData = {Tag: [] for Tag in Tags} # taking an average of all the data points each day
+            AverageTime = []
+            # finding and separating the data when the compressor is hot to take the average temperature
+            threshold = 70
+            for X in Data:
+                compressor_hot = np.where(X['Compressor'] >= threshold)[0] # finding all the instances where the compressor is above 70C
+                time = X['Time'][compressor_hot]
+                AverageTime.append(time[0])
+                for Tag in Tags:
+                    average = np.average(X[Tag][compressor_hot])
+                    AverageData[Tag].append(average)
+
+            for i, (ax, Tag) in enumerate(zip(axes, Tags)):
+                ax.scatter(AverageTime, AverageData[Tag], color=colors[i], label=Tag, s=10)
+                ax.legend(loc='best')
+            
+            axes[0].set_ylim(70, 80)
+            axes[1].set_ylim(22, 25)
+            axes[2].set_ylim(30, 33)
+        elif Selection == 'Xenon Pressure': # selecting only the data points when there is xenon by the pressure gauge
+            AverageData = {Tag:[] for Tag in Tags} # taking an average of all the data points each day
+            AverageTime = {Tag:[] for Tag in Tags}
+
+            # finding and separating the data when the xenon is in the pressure reading tube
+            Lthreshold = 350
+            Rthreshold = 550
+            for X in Data:
+                Lcylinder_on = np.where(X['Stainless-steel Cylinder 2'] > Lthreshold)[0] # finding all the instances where the pressure is above 350 PSI
+                Rcylinder_on = np.where(X['Stainless-steel Cylinder 1'] > Rthreshold)[0] # finding all the instances where the pressure is above 550 PSI
+                Ltime = X['Time'][Lcylinder_on]
+                if len(Ltime) > 0:
+                    AverageTime['Stainless-steel Cylinder 2'].append(Ltime[0])
+                Rtime = X['Time'][Rcylinder_on]
+                if len(Rtime) > 0:
+                    AverageTime['Stainless-steel Cylinder 1'].append(Rtime[0])
+                for Tag, pressure in zip(Tags, [Rcylinder_on, Lcylinder_on]):
+                    if len(pressure) > 0:
+                        average = np.average(X[Tag][pressure])
+                        AverageData[Tag].append(average)
+            for i, (ax, Tag) in enumerate(zip(axes, Tags)):
+                ax.scatter(AverageTime[Tag], AverageData[Tag], color=colors[i], label=Tag, s=10)
+                ax.legend(loc='best')
+            axes[0].set_ylim(500, 700)
+            axes[1].set_ylim(300, 500)
+
+# add more options here as needed
 
 
 
