@@ -11,3 +11,4 @@ Background.py
 *.h5
 pyrpl/*
 *.npy
+.ds_store
