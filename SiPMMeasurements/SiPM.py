@@ -24,6 +24,7 @@ class SiPM(Dataset.Dataset):
         self.filter_coefficients=[]
         self.sampling_freq=None #Sampling rate for the waveforms in Hz
 
+
     def get_filtered_waveform(self,amp):
         filtered_waveform=[]
         for filt_ceoffs in self.filter_coefficients:
@@ -32,17 +33,16 @@ class SiPM(Dataset.Dataset):
         return filtered_waveform
 
 
-
     def get_averaged_waveform(self, time, amp, avg=4):
         avg_time = time[:-avg+1]
         avg_amp = np.convolve(amp,np.ones(avg),'valid')/avg
         return avg_time, avg_amp
 
+
     def run_fit(self, time, amp):
         max_val = np.max(Amp[cut])
         max_pos_cut = np.where(Amp[cut] == np.max(Amp[cut]))[0][0]
         max_pos = D0.Ch[1].Time[cut][max_pos_cut]
-
 
 
     def setup_butter_filter(self, order=3):
@@ -58,7 +58,6 @@ class SiPM(Dataset.Dataset):
             b, a = butter(order, [(1/s_time)/nyq], btype='low', analog=False)
             self.filter_coefficients.append([b,a])
 
-            
     
     def fit_peaks(self, time, data):
         peaks,pdict = find_peaks(data, height=35, width=20, distance=50)
@@ -78,14 +77,14 @@ class SiPM(Dataset.Dataset):
                 self.fit_parameters.append([0,0,0,0,0])
                 self.fit_covariance.append([])
     
+
     def func(self,x,base,V0,sigma,tau,mu):
         return base + V0/2.0 * np.exp(0.5 * (sigma/tau)**2 - (x-mu)/tau) * erfc(1.0/np.sqrt(2.0) * (sigma/tau - (x-mu)/sigma))
     
+
     def gauss_conv(self, x, mu=0, sigma=0.1):
         x = x-mu
         return np.exp(-np.square((x-mu)/sigma)/2)/(sigma*np.sqrt(2*np.pi))
-
-
 
     
     def get_sampling(self):
